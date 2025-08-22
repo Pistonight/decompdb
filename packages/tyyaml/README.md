@@ -20,10 +20,10 @@ The `SPEC ...` part of the sequence can be:
   - SUBROUTINE: 2 elements should follow `TYPE_ID`: the string value `()`, and a sequence of `TYPE`s that are the function parameters.
     To form a pointer-to-subroutine type (i.e. a function pointer), another POINTER spec must follow.
     Example: `[ u32,'()',[[ u32 ],[ u32,'*' ]],'*' ]` is `u32 (*)(u32, u32*)`.
-  - POINTER_TO_MEMBER: 2 Elements should follow `TYPE_ID`: the class `TYPE`, and the string value `::`.
+  - POINTER_TO_MEMBER: 2 Elements should follow `TYPE_ID`: the class `TYPE_ID`, and the string value `::`.
     A POINTER or SUBROUTINE spec must then follow, to form a pointer-to-member-data or pointer-to-member-function type, respectively.
     Example: `[ u32,'"Foo"','::','*' ]` is `u32 Foo::*`, 
-    `[ u32,'"Foo"','::','()',[[ u32 ],[ u32,'*' ]],'*' ]` is `u32 (Foo::*bar)(u32, u32*)`.
+    `[ u32,'"Foo"','::','()',[[ u32 ],[ u32,'*' ]],'*' ]` is `u32 (Foo::*)(u32, u32*)`.
 
 Once a `TYPE` is parsed, more `SPEC` can follow to continue building up the `TYPE`.
 For example, `[ u32, '*', '*' ]` is `u32**`.
