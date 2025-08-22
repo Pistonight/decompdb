@@ -78,7 +78,7 @@ impl Type {
             if let Some(first) = iter.next() {
                 first.write_tyyaml(buf);
                 for arg in iter {
-                    buf.push_str(", ");
+                    buf.push_str(",");
                     arg.write_tyyaml(buf);
                 }
             }

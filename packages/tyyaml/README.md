@@ -13,54 +13,59 @@ A `TYPE` in TyYAMl is represented as a sequence (an array):
   - or a named type: `"NAME"`. Note the quotes around the name are part of the value. In the actual document, it would be further surrounded by single quotes `'"NAME"'`
 
 The `SPEC ...` part of the sequence can be:
-  - pointer spec: one element that is the string value `*`.
-    Example: `[ u32, '*' ]` is `u32*` in C.
-  - array spec: one element that is a sequence with one number, the length of the array. Example: `[ u32, [16] ]` is `u32 foo[16]` in C
-  - subroutine spec: 2 elements. The first is the string value `()` to indicate this is a subroutine. The second is a sequence of `TYPE`s that are the function parameters. Example `[ u32, '()', [ [ u32 ], [ u32, '*'] ], '*' ]` is `u32 (*foo)(u32, u32*)` in C. Note the last `*` is part of another pointer spec. See below. 
-  - member spec: 2 Elements. The first is another `TYPE_ID` that is the base type.
-    The second is the string value `::`.
+  - POINTER: one element that is the string value `*`.
+    Example: `[ u32,'*' ]` is `u32*`.
+  - ARRAY: one element that is a sequence with one number, the length of the array.
+    Example: `[ u32,[16] ]` is `u32[16]`.
+  - SUBROUTINE: 2 elements should follow `TYPE_ID`: the string value `()`, and a sequence of `TYPE`s that are the function parameters.
+    To form a pointer-to-subroutine type (i.e. a function pointer), another POINTER spec must follow.
+    Example: `[ u32,'()',[[ u32 ],[ u32,'*' ]],'*' ]` is `u32 (*)(u32, u32*)`.
+  - POINTER_TO_MEMBER: 2 Elements should follow `TYPE_ID`: the class `TYPE`, and the string value `::`.
+    A POINTER or SUBROUTINE spec must then follow, to form a pointer-to-member-data or pointer-to-member-function type, respectively.
+    Example: `[ u32,'"Foo"','::','*' ]` is `u32 Foo::*`, 
+    `[ u32,'"Foo"','::','()',[[ u32 ],[ u32,'*' ]],'*' ]` is `u32 (Foo::*bar)(u32, u32*)`.
 
-Multiple `SPEC` can follow the `TYPE_ID`. For example, `[ u32, '*', '*' ]` is `u32**`.
-For member spec, there must be 1 or 2 more specs that follow:
-  - pointer-to-member-data: there must be 1 more pointer spec '*'. Example `[ u32, '"Foo"', '::', '*' ]`
-    is `u32 Foo::*bar` in CPP.
-  - pointer-to-member-function: there must be 1 more subroutine spec and 1 more pointer spec.
-    Example `[ u32, '"Foo"', '::', '()', [ [ u32 ], [ u32, '*' ] ], '*' ]` is `u32 (Foo::*bar)(u32, u32*)` in CPP.
+Once a `TYPE` is parsed, more `SPEC` can follow to continue building up the `TYPE`.
+For example, `[ u32, '*', '*' ]` is `u32**`.
 
 ## Struct Representation
-A struct is represented as a YAML mapping:
-  - `name` is the literal name of the struct, without quotes. For example, the literal YAML can be `name: 'Foo::bar'`
-  - `size` is the size of the struct in hex, prefixed with `0x`, e.g. `size: 0x60`
-  - `align` is the alisngment of the struct in hex, prefixed with `0x`, e.g. `size: 0x8`
-  - `vtable` (optional) is the layout of the virtual function table for this struct.
-    - `vtable` is a sequence of mappings. Each mapping has `name` and `type`. `name`
-      is the name of the virtual function, and `type` is the `TYPE` of the function (which must be `TYPE_ID` of the return type, followed by a subroutine spec and a pointer spec).
-    - Ctors and Dtors may be suffixed with `D0`, `D1`, etc, to disambiguate.
-  - `members` is the layout of the members of the struct, which is a mapping.
-    - the keys of the mapping are string hex values that is the offset of the member
-      in the struct.
-    - the value of the mapping is another mapping that describes the member:
-      - `base` (optional): boolean to indicate if this member is a base class
-      - `vtable` (optional): string for a name of a struct. The `vtable` for that struct
-        will be used.
-      - `name`: name of the member, omitted if `vtable` or `base` is true.
-      - `type`: `TYPE` of the member, omitted if `vtable` or `base` is true. 
-    - the entries in the mapping must be sorted by the offset (key).
-
-An example struct:
+A struct is represented as a YAML mapping, for example:
 ```yaml
 name: 'ksys::snd::InfoData'
 size: 0x80
 align: 0x1
 vtable:
-  - { name: '~InfoDataD1', type: [ void,'()', [['"ksys::snd::InfoData"','*']],'*' ] }
-  - { name: '~InfoDataD0', type: [ void,'()', [['"ksys::snd::InfoData"','*']],'*' ] }
+  - '~InfoDataD1': [ void,'()',[['"ksys::snd::InfoData"','*']],'*' ]
+  - '~InfoDataD0': [ void,'()',[['"ksys::snd::InfoData"','*']],'*' ]
 members:
-  '0x0': { vtable: 'ksys::snd::InfoData' }
-  '0x8': { name: 'mSingletonDisposerBuf_', type: [ u32,[8] ] }
-  '0x28': { name: 'mRootIter', type: [ '"al::ByamlIter"','*' ] }
-  '0x30': { name: 'mResHandle', type: [ '"ksys::res::Handle"' ] }
+  '0x00': { vtable: 'ksys::snd::InfoData' }
+  '0x08': { 'mSingletonDisposerBuf_': [ u32,[8] ] }
+  '0x28': { 'mRootIter': [ '"al::ByamlIter"','*' ] }
+  '0x30': { 'mResHandle': [ '"ksys::res::Handle"' ] }
 ```
+
+- `name` is the literal name of the struct, without quotes.
+- `size` is the size of the struct in hex, prefixed with `0x`, as a numeric value.
+- `align` is the alisngment of the struct in hex, prefixed with `0x`, as a numeric value.
+- `vtable` (optional) is a sequence that represents the layout of the virtual function table for this struct.
+  - Note that it would not contain information before the virtual functions array. (e.g. offset, RTTI).
+  - It would contain virtual functions in the first base class (if any), and virtual functions in the derived class.
+  - Each element in the sequence is a mapping, where the key is the `name` of the virtual function,
+    and the value is the `TYPE` of that function - a pointer-to-subroutine type.
+  - Ctors and Dtors may be suffixed with `C0`, `C1`, `C2`, `D0`, `D1` or `D2` to disambiguate.
+- `members` is the layout of the members of the struct, which is a mapping.
+  - The key of the mapping is the offset of the member in hex, prefixed with `0x`, as a string.
+    The key should be 0-padded so that all keys have the same length.
+  - The value of the mapping is another mapping, which can be one of:
+    - `{ base: 'BaseClass' }` for a base class `BaseClass` at this offset.
+    - `{ vtable: 'Class' }` for a virtual function table pointer that points to a function table that is the same type
+      as the vtable of `Class`. Note that the vtable pointer might be part of the base class.
+      In this case, TyYAML currently does not have the power to indicate the actual vtable type.
+    - `{ 'mName': TYPE }` for a regular member with the name `mName` of type `TYPE`.
+    - `{ pad: X }` for an implicit padding of `X` bytes. `X` is in hex, prefixed with `0x` as a numeric value.
+      Note that implicit padding will never show up as the last member
+  - The entries in the mapping must be sorted by the offset (key).
+
 
 ## Enum Representation
 An enum is represented as a mapping.
