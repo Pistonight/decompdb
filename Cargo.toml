@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "packages/tyyaml"
+]
+resolver = "2"
+
+[workspace.dependencies.cu]
+package = "pistonite-cu"
+version = "0.5.0"
+
