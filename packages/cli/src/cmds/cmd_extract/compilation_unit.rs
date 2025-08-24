@@ -197,6 +197,38 @@ impl<'d, 'i> CompUnit<'d, 'i> {
         }
     }
 
+    /// Get the DW_TAG_vtable_elem_location of a DIE (index of the entry in the vtable), return None if not virtual
+    pub fn entry_vtable_index(&self, entry: &Die<'i, '_, '_>) -> cu::Result<Option<usize>> {
+        let offset = self.entry_goff(entry);
+        let virtuality = cu::check!(
+            entry.attr_value(DW_AT_virtuality),
+            "failed to read DW_AT_virtuality for entry at {offset}"
+        )?;
+        let velem = cu::check!(
+            entry.attr_value(DW_AT_vtable_elem_location),
+            "failed to read DW_AT_vtable_elem_location for entry at {offset}"
+        )?;
+        match virtuality {
+            None | Some(AttributeValue::Virtuality(DW_VIRTUALITY_none)) => {
+                // vtable_elem_localtion should not be there
+                if velem.is_some() {
+                    cu::bail!("DW_AT_vtable_elem_location should not exist for non virtual entry at {offset}");
+                }
+                Ok(None)
+            }
+            Some(AttributeValue::Virtuality(DW_VIRTUALITY_virtual))
+            | Some(AttributeValue::Virtuality(DW_VIRTUALITY_pure_virtual)) => {
+                let velem = cu::check!(
+                    velem,
+                    "missing DW_AT_vtable_elem_location for virtual entry at {offset}"
+                )?;
+                let vel = self.attr_unsigned(offset, DW_AT_vtable_elem_location, velem)?;
+                Ok(Some(vel as usize))
+            }
+            _ => cu::bail!("expecting DW_AT_virtuality to be Virtuality, at entry {offset}"),
+        }
+    }
+
     /// Execute f on each direct child node (does not include the input node)
     pub fn for_each_child<F>(&self, node: Node<'i, '_, '_, '_>, mut f: F) -> cu::Result<()>
     where

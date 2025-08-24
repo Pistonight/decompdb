@@ -64,10 +64,6 @@ pub enum Type0 {
     Typedef(String, Goff),
     /// Alias to another type (basically typedef without a name)
     Alias(Goff),
-    /// Struct or Class
-    Struct,
-    /// Declaration of struct or class
-    StructDecl(String),
     /// Enum
     Enum(String, Type0Enum),
     /// Anonymous Enum
@@ -80,6 +76,12 @@ pub enum Type0 {
     UnionAnon(Type0Union),
     /// Declaration of union
     UnionDecl(String),
+    /// Struct or Class
+    Struct(String, Type0Struct),
+    /// Anonymous Struct
+    StructAnon(Type0Struct),
+    /// Declaration of struct or class
+    StructDecl(String),
     /// Composition of other types
     Composite(TyTree<Option<Goff>>),
 }
@@ -103,10 +105,28 @@ pub struct Type0Enum {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Type0Union {
-    // /// Base type, used to determine the size
-    // size_or_base: Result<u32, Goff>,
-    // /// Enumerators of the enum, in the order they appear in DWARF
-    // enumerators: Vec<(String, i64)>
+    /// (name, type) of the union members
+    /// Name could be None for anonymous struct as member
+    members: Vec<(Option<String>, Goff)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Type0Struct {
+    members: Vec<Type0StructMember>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Type0StructMember {
+    /// Offset of the member within the struct
+    offset: usize,
+    /// Name of the member. Could be None for anonymous union as member
+    name: Option<String>,
+    /// Type of the member
+    ty: Goff,
+    /// If the member is a base class
+    is_base: bool,
+    /// If the member is a bitfield, and the byte size
+    bitfield_byte_size: Option<u32>,
 }
 
 impl<'i> CompUnit<'_, 'i> {
@@ -242,6 +262,7 @@ impl<'i> CompUnit<'_, 'i> {
             }
             DW_TAG_base_type => Type0::Prim(self.load_base_type_from_entry(entry)?),
             DW_TAG_enumeration_type => self.load_enum_type_from_entry(entry, ctx)?,
+            DW_TAG_union_type => self.load_union_type_from_entry(entry, ctx)?,
             _ => todo!(),
         };
         ctx.types.insert(offset, ty);
@@ -396,21 +417,133 @@ impl<'i> CompUnit<'_, 'i> {
             ),
         };
         Ok(ty)
-        // // change anonymous enum to the base type or the primitive type
-        // let Some(name) = name else {
-        //     let ty = match size_or_base {
-        //         Ok(1) => Type0::Prim(Prim::U8),
-        //         Ok(2) => Type0::Prim(Prim::U16),
-        //         Ok(4) => Type0::Prim(Prim::U32),
-        //         Ok(8) => Type0::Prim(Prim::U64),
-        //         Ok(16) => Type0::Prim(Prim::U128),
-        //         Ok(bad_size) => {
-        //             cu::bail!("failed to coerce anonymous enum type of size 0x{bad_size:x} to a primitive type");
-        //         }
-        //         Err(ty_off) => Type0::Alias(ty_off),
-        //     };
-        //     return Ok(ty);
-        // };
+    }
+
+    fn load_union_type_from_entry(&self, entry: &Die<'i, '_, '_>, ctx: &mut LoadTypeCtx) -> cu::Result<Type0> {
+        let offset = self.entry_goff(entry);
+        let name = cu::check!(
+            self.namespaced_entry_name_opt(entry, &ctx.namespaces),
+            "failed to get union name at {offset}"
+        )?;
+        let is_decl = cu::check!(
+            self.entry_is_decl(entry),
+            "failed to check if union is declaration at {offset}"
+        )?;
+        if is_decl {
+            let Some(name) = name else {
+                cu::bail!("unexpected union decl without name at {offset}");
+            };
+            return Ok(Type0::UnionDecl(name));
+        }
+
+        let byte_size = cu::check!(
+            self.entry_unsigned_attr(entry, DW_AT_byte_size),
+            "failed to get union byte size at {offset}"
+        )?;
+        if byte_size > u32::MAX as u64 {
+            cu::bail!("union at {offset} is too big (byte_size={byte_size}). This is unlikely to be correct");
+        }
+        let byte_size = byte_size as u32;
+
+        let mut members = Vec::<(Option<&'_ str>, Goff)>::with_capacity(16);
+        self.entry_for_each_child(entry, |child| {
+            let child_entry = child.entry();
+            let child_offset = self.entry_goff(child_entry);
+            match child_entry.tag() {
+                DW_TAG_member => {
+                    let name = self.entry_name_opt(child_entry)?;
+                    let ty_offset = cu::check!(
+                        self.entry_type_offset_opt(child_entry),
+                        "failed to get type for union member at {child_offset}"
+                    )?;
+                    let ty_offset = cu::check!(ty_offset, "unexpected void-typed union member at {child_offset}")?;
+                    let ty_offset = ty_offset.to_global(self.offset);
+                    // if type is duplicated, just ignore it
+                    match members.iter_mut().find(|x| x.1 == ty_offset) {
+                        None => members.push((name, ty_offset)),
+                        Some((old_name, _)) => {
+                            // update the name if we have it now
+                            if old_name.is_none() {
+                                *old_name = name;
+                            }
+                        }
+                    }
+                }
+                DW_TAG_structure_type
+                | DW_TAG_class_type
+                | DW_TAG_union_type
+                | DW_TAG_enumeration_type
+                | DW_TAG_typedef
+                | DW_TAG_template_type_parameter
+                | DW_TAG_template_value_parameter
+                | DW_TAG_GNU_template_parameter_pack => {
+                    // ignore subtypes
+                }
+                DW_TAG_subprogram => {
+                    // unions can't be virtual for now
+                    if self.entry_vtable_index(child_entry)?.is_some() {
+                        cu::bail!("unsupported virtual function in union at {child_offset}");
+                    }
+                }
+                tag => {
+                    cu::bail!("unexpected tag {tag} at {child_offset} while processing union");
+                }
+            }
+            Ok(())
+        })?;
+        // assign names for anonymous members
+        let mut anon_count = 0;
+        let mut members2 = Vec::with_capacity(members.len());
+        for (name, ty) in &members {
+            if let Some(name) = name {
+                members2.push((name.to_string(), *ty));
+                continue;
+            }
+            anon_count += 1;
+            let mut anon_name = format!("_anon{anon_count}");
+            let mut attempt = 0;
+            while members.iter().any(|(n, _)| n == &Some(anon_name.as_str())) {
+                if attempt > 100 {
+                    cu::bail!("failed to assign name to anonymous member for union type at {offset}");
+                }
+                attempt += 1;
+                anon_name.push('_');
+            }
+            members2.push((anon_name, *ty));
+        }
+
+        let members = members2;
+        let ty = match name {
+            None => Type0::UnionAnon(Type0Union { members }),
+            Some(name) => Type0::Union(name, Type0Union { members }),
+        };
+        Ok(ty)
+    }
+
+    fn load_struct_type_from_entry(&self, entry: &Die<'i, '_, '_>, ctx: &mut LoadTypeCtx) -> cu::Result<Type0> {
+        let offset = self.entry_goff(entry);
+        let name = cu::check!(
+            self.namespaced_entry_name_opt(entry, &ctx.namespaces),
+            "failed to get struct name at {offset}"
+        )?;
+        let is_decl = cu::check!(
+            self.entry_is_decl(entry),
+            "failed to check if struct is declaration at {offset}"
+        )?;
+        if is_decl {
+            let Some(name) = name else {
+                cu::bail!("unexpected struct decl without name at {offset}");
+            };
+            return Ok(Type0::StructDecl(name));
+        }
+
+        let byte_size = cu::check!(
+            self.entry_unsigned_attr_opt(entry, DW_AT_byte_size),
+            "failed to get struct byte size at {offset}"
+        )?;
+        let byte_size = byte_size.unwrap_or(0); // types can be 0 size?
+
+        todo!()
     }
 
     /// Read an attribute of a DIE, expecting a type offset, allowing it to be missing
