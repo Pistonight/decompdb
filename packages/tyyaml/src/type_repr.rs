@@ -1,6 +1,6 @@
 use cu::pre::*;
 
-use crate::{Prim, Ty};
+use crate::{Prim, Ty, TyTree};
 
 /// A TyYAML Type representation.
 ///
@@ -11,22 +11,7 @@ use crate::{Prim, Ty};
 /// is what you see in documentation. The `to_string` implementation will print
 /// a CPP-like type syntax, but note pointer-to-member types might not be the same syntax if the
 /// pointee or return type is an array or a pointer-to-subroutine type.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Type {
-    /// A basic type `[ TYPE_ID ]`
-    Base(Ty),
-    /// An array type `[ TYPE_ID,[LEN] ]`
-    Array(Box<Type>, usize),
-    /// A pointer type `[ TYPE_ID,'*' ]`
-    Ptr(Box<Type>),
-    /// A subroutine type `[ RET_TYPE_ID,'()',[ ARG_TYPE, ... ] ]`. Note that this must be wrapped
-    /// in a pointer to form a pointer-to-subroutine (i.e. function pointer) type.
-    Sub(Vec<Type> /*[retty, args...]*/),
-    /// A pointer-to-member-data type `[ VALUE_TYPE_ID,CLASS_TYPE_ID,'::','*' ]`
-    Ptmd(Ty /*base*/, Box<Type>/*pointee*/),
-    /// A pointer-to-member-function type `[ VALUE_TYPE_ID,CLASS_TYPE_ID,'::','()',[ ARG_TYPE, ...],'*' ]`
-    Ptmf(Ty /*base*/, Vec<Type>/*[retty, args]*/),
-}
+pub type Type = TyTree<Ty>;
 impl From<Prim> for Type {
     fn from(value: Prim) -> Self {
         Self::Base(Ty::Prim(value))
@@ -36,18 +21,6 @@ impl From<Prim> for Type {
 impl Type {
     pub fn named(x: impl Into<String>) -> Self {
         Self::Base(Ty::Named(x.into()))
-    }
-    pub fn ptr(pointee: impl Into<Type>) -> Self {
-        Self::Ptr(Box::new(pointee.into()))
-    }
-    pub fn ptmd(base: impl Into<Ty>, pointee: impl Into<Type>) -> Self {
-        Self::Ptmd(base.into(), Box::new(pointee.into()))
-    }
-    pub fn ptmf(base: impl Into<Ty>, sub: Vec<Type>) -> Self {
-        Self::Ptmf(base.into(), sub)
-    }
-    pub fn array(pointee: impl Into<Type>, len: usize) -> Self {
-        Self::Array(Box::new(pointee.into()), len)
     }
     pub fn to_tyyaml(&self) -> String {
         let mut out = String::new();

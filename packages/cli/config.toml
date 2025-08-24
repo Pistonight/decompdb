@@ -1,0 +1,15 @@
+[paths]
+elf = "../../../botw-decomp/build/uking"
+extract = "../../../botw-decomp/build/decompdb-extract"
+
+[paths.functions-csv]
+path = "../../../botw-decomp/data/uking_functions.csv"
+base-address = 0x7100000000
+address-column = 0
+symbol-column = 3
+
+[paths.data-csv]
+path = "../../../botw-decomp/data/data_symbols.csv"
+base-address = 0x7100000000
+address-column = 0 
+symbol-column = 1

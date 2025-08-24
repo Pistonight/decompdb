@@ -92,12 +92,15 @@ pub enum Prim {
     U16,
     U32,
     U64,
+    U128,
     I8,
     I16,
     I32,
     I64,
+    I128,
     F32,
-    F64
+    F64,
+    F128,
 }
 
 impl Prim {
@@ -113,12 +116,15 @@ impl Prim {
             Prim::U16 => "u16",
             Prim::U32 => "u32",
             Prim::U64 => "u64",
+            Prim::U128 => "u128",
             Prim::I8 => "i8",
             Prim::I16 => "i16",
             Prim::I32 => "i32",
             Prim::I64 => "i64",
+            Prim::I128 => "i128",
             Prim::F32 => "f32",
             Prim::F64 => "f64",
+            Prim::F128 => "f128",
         }
     }
 
@@ -131,12 +137,15 @@ impl Prim {
             "u16" => Prim::U16,
             "u32" => Prim::U32,
             "u64" => Prim::U64,
+            "u128" => Prim::U128,
             "i8" => Prim::I8,
             "i16" => Prim::I16,
             "i32" => Prim::I32,
             "i64" => Prim::I64,
+            "i128" => Prim::I128,
             "f32" => Prim::F32,
             "f64" => Prim::F64,
+            "f128" => Prim::F128,
             _ => return None,
         })
     }
@@ -160,12 +169,16 @@ mod tests {
         assert_eq!(yaml::stringify(&Prim::U8)?.trim(), Prim::U8.to_string());
         assert_eq!(yaml::stringify(&Prim::U16)?.trim(), Prim::U16.to_string());
         assert_eq!(yaml::stringify(&Prim::U32)?.trim(), Prim::U32.to_string());
+        assert_eq!(yaml::stringify(&Prim::U64)?.trim(), Prim::U64.to_string());
+        assert_eq!(yaml::stringify(&Prim::U128)?.trim(), Prim::U128.to_string());
         assert_eq!(yaml::stringify(&Prim::I8)?.trim(), Prim::I8.to_string());
         assert_eq!(yaml::stringify(&Prim::I16)?.trim(), Prim::I16.to_string());
         assert_eq!(yaml::stringify(&Prim::I32)?.trim(), Prim::I32.to_string());
         assert_eq!(yaml::stringify(&Prim::I64)?.trim(), Prim::I64.to_string());
+        assert_eq!(yaml::stringify(&Prim::I128)?.trim(), Prim::I128.to_string());
         assert_eq!(yaml::stringify(&Prim::F32)?.trim(), Prim::F32.to_string());
         assert_eq!(yaml::stringify(&Prim::F64)?.trim(), Prim::F64.to_string());
+        assert_eq!(yaml::stringify(&Prim::F128)?.trim(), Prim::F128.to_string());
         Ok(())
     }
 }

@@ -1,0 +1,20 @@
+[package]
+name = "decompdb-cli"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[dependencies]
+cu = { workspace = true, features = ["cli", "process", "toml", "derive"] }
+elf = "0.8.0"
+fxhash = "0.2.1"
+gimli = "0.32.1"
+regex = "1.11.1"
+serde = "1"
+spin = "0.10.0"
+tyyaml = { path = "../tyyaml" }
+
+[[bin]]
+name = "decompdb"
+path = "src/main.rs"
