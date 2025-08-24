@@ -104,9 +104,7 @@ impl<'i> CompUnit<'_, 'i> {
         match tag {
             DW_TAG_compile_unit => {
                 // top-most case
-                self.for_each_child(node, |child| {
-                    self.read_namespace_recur(child, namespace, offset_to_ns)
-                })?;
+                self.for_each_child(node, |child| self.read_namespace_recur(child, namespace, offset_to_ns))?;
             }
             DW_TAG_namespace => {
                 // doesn't need to add to map for namespace nodes

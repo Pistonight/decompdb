@@ -45,10 +45,7 @@ fn run(config: Config) -> cu::Result<()> {
     let mut iter = debug_info.units();
     let mut units = Vec::new();
 
-    while let Some(unit_header) = iter
-        .next()
-        .context("error reading DWARF compilation unit header")?
-    {
+    while let Some(unit_header) = iter.next().context("error reading DWARF compilation unit header")? {
         let unit_ctx = CompUnit::new(unit_header, &dwarf)?;
         units.push(unit_ctx);
     }
@@ -71,8 +68,7 @@ pub fn parse_dwarf(bytes: &[u8]) -> cu::Result<Dwarf<'_>> {
     use elf::endian::LittleEndian as ElfLittleEndian;
     use gimli::{DwarfFileType, EndianSlice, LittleEndian as DwarfLittleEndian};
 
-    let elf_data =
-        ElfBytes::<ElfLittleEndian>::minimal_parse(bytes).context("failed to parse ELF")?;
+    let elf_data = ElfBytes::<ElfLittleEndian>::minimal_parse(bytes).context("failed to parse ELF")?;
     let mut dwarf = gimli::Dwarf::load(|section| {
         let section_name = section.name();
         cu::debug!("loading ELF section {section_name}");
@@ -93,7 +89,8 @@ pub fn parse_dwarf(bytes: &[u8]) -> cu::Result<Dwarf<'_>> {
             }
         };
         cu::Ok(endian_slice)
-    }).context("failed to load DWARF from ELF")?;
+    })
+    .context("failed to load DWARF from ELF")?;
     dwarf.file_type = DwarfFileType::Main;
 
     Ok(dwarf)

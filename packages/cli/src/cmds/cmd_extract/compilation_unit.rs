@@ -25,9 +25,7 @@ impl<'d, 'i> CompUnit<'d, 'i> {
         let offset = match header.offset() {
             UnitSectionOffset::DebugInfoOffset(o) => o.0,
             UnitSectionOffset::DebugTypesOffset(o) => {
-                cu::bail!(
-                    "failed to get DWARF offset for compilation unit: expecting DebugInfoOffset, got {o:?}"
-                );
+                cu::bail!("failed to get DWARF offset for compilation unit: expecting DebugInfoOffset, got {o:?}");
             }
         };
         let unit = Unit::new(dwarf, header).context("failed to create gimli::Unit")?;
@@ -60,9 +58,7 @@ impl<'d, 'i> CompUnit<'d, 'i> {
 
     /// Create entry tree from entry at offset
     pub fn tree_at(&self, local_off: Loff) -> cu::Result<Tree<'i, '_, '_>> {
-        let tree = self
-            .header
-            .entries_tree(&self.abbrevs, Some(local_off.into()));
+        let tree = self.header.entries_tree(&self.abbrevs, Some(local_off.into()));
         cu::check!(
             tree,
             "failed to create gimli::EntriesTree at {} for {self}",
@@ -87,10 +83,7 @@ impl<'d, 'i> CompUnit<'d, 'i> {
             entry.attr_value(DW_AT_name),
             "failed to read DW_AT_name at offset {offset} in {self}"
         )?;
-        let value = cu::check!(
-            value,
-            "DW_AT_name is missing for entry at offset {offset} in {self}"
-        )?;
+        let value = cu::check!(value, "DW_AT_name is missing for entry at offset {offset} in {self}")?;
         self.attr_string(value)
     }
 
@@ -128,10 +121,7 @@ impl<'d, 'i> CompUnit<'d, 'i> {
     /// Get a signed integer attribute value
     pub fn entry_signed_attr(&self, entry: &Die<'i, '_, '_>, attr: DwAt) -> cu::Result<i64> {
         let offset = self.entry_goff(entry);
-        let value = cu::check!(
-            entry.attr_value(attr),
-            "failed to read {attr} at offset {offset}"
-        )?;
+        let value = cu::check!(entry.attr_value(attr), "failed to read {attr} at offset {offset}")?;
         let value = cu::check!(value, "entry is missing {attr} at offset {offset}")?;
         let value = self.attr_signed(offset, attr, value)?;
         Ok(value)
@@ -140,26 +130,16 @@ impl<'d, 'i> CompUnit<'d, 'i> {
     /// Get an unsigned integer attribute value
     pub fn entry_unsigned_attr(&self, entry: &Die<'i, '_, '_>, attr: DwAt) -> cu::Result<u64> {
         let offset = self.entry_goff(entry);
-        let value = cu::check!(
-            entry.attr_value(attr),
-            "failed to read {attr} at offset {offset}"
-        )?;
+        let value = cu::check!(entry.attr_value(attr), "failed to read {attr} at offset {offset}")?;
         let value = cu::check!(value, "entry is missing {attr} at offset {offset}")?;
         let value = self.attr_unsigned(offset, attr, value)?;
         Ok(value)
     }
 
     /// Get an unsigned integer attribute value, allowing it to be missing
-    pub fn entry_unsigned_attr_opt(
-        &self,
-        entry: &Die<'i, '_, '_>,
-        attr: DwAt,
-    ) -> cu::Result<Option<u64>> {
+    pub fn entry_unsigned_attr_opt(&self, entry: &Die<'i, '_, '_>, attr: DwAt) -> cu::Result<Option<u64>> {
         let offset = self.entry_goff(entry);
-        let value = cu::check!(
-            entry.attr_value(attr),
-            "failed to read {attr} at offset {offset}"
-        )?;
+        let value = cu::check!(entry.attr_value(attr), "failed to read {attr} at offset {offset}")?;
         let Some(value) = value else {
             return Ok(None);
         };
@@ -168,12 +148,7 @@ impl<'d, 'i> CompUnit<'d, 'i> {
     }
 
     /// Get an attribute value as signed integer
-    pub fn attr_signed(
-        &self,
-        offset: Goff,
-        at: DwAt,
-        attr: AttributeValue<In<'i>>,
-    ) -> cu::Result<i64> {
+    pub fn attr_signed(&self, offset: Goff, at: DwAt, attr: AttributeValue<In<'i>>) -> cu::Result<i64> {
         match attr {
             AttributeValue::Data1(x) => Ok(x as i64),
             AttributeValue::Data2(x) => Ok(x as i64),
@@ -185,12 +160,7 @@ impl<'d, 'i> CompUnit<'d, 'i> {
         }
     }
     /// Get an attribute value as unsigned integer
-    pub fn attr_unsigned(
-        &self,
-        offset: Goff,
-        at: DwAt,
-        attr: AttributeValue<In<'i>>,
-    ) -> cu::Result<u64> {
+    pub fn attr_unsigned(&self, offset: Goff, at: DwAt, attr: AttributeValue<In<'i>>) -> cu::Result<u64> {
         match attr {
             AttributeValue::Data1(x) => Ok(x as u64),
             AttributeValue::Data2(x) => Ok(x as u64),
@@ -200,15 +170,10 @@ impl<'d, 'i> CompUnit<'d, 'i> {
             // this is used for vtable elem location
             AttributeValue::Exprloc(expr) => {
                 let mut ops = expr.operations(self.unit.encoding());
-                let op = cu::check!(
-                    ops.next(),
-                    "failed to read Exprloc ops for entry {offset}, attr {at}"
-                )?;
+                let op = cu::check!(ops.next(), "failed to read Exprloc ops for entry {offset}, attr {at}")?;
                 let op = cu::check!(op, "expecting an Exprloc ops for entry {offset}, attr {at}")?;
                 let Operation::UnsignedConstant { value } = op else {
-                    cu::bail!(
-                        "expecting UnsignedConstant for Exprloc ops for entry {offset}, attr {at}"
-                    );
+                    cu::bail!("expecting UnsignedConstant for Exprloc ops for entry {offset}, attr {at}");
                 };
                 Ok(value)
             }
@@ -244,10 +209,7 @@ impl<'d, 'i> CompUnit<'d, 'i> {
             "failed to read a child for entry at {offset} in {self}"
         )? {
             let child_offset = self.entry_goff(child.entry());
-            cu::check!(
-                f(child),
-                "error while processing child entry at {child_offset}"
-            )?;
+            cu::check!(f(child), "error while processing child entry at {child_offset}")?;
         }
         Ok(())
     }

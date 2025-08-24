@@ -58,11 +58,7 @@ impl CfgExtractResolutionRules {
             .iter()
             .position(|x| x.is_match(name))
             .unwrap_or(self.prefer.len());
-        let dislike_i = self
-            .dislike
-            .iter()
-            .position(|x| x.is_match(name))
-            .unwrap_or(0);
+        let dislike_i = self.dislike.iter().position(|x| x.is_match(name)).unwrap_or(0);
 
         prefer_i << 16 | dislike_i
     }
@@ -77,10 +73,7 @@ impl<'de> Deserialize<'de> for CfgExtractResolutionRules {
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 write!(f, "an array of name regular expressions")
             }
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
-                self,
-                mut seq: A,
-            ) -> Result<Self::Value, A::Error> {
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
                 const MAX: usize = 60000;
                 let mut prefer = vec![];
                 let mut dislike = vec![];
@@ -101,16 +94,12 @@ impl<'de> Deserialize<'de> for CfgExtractResolutionRules {
                     if is_parsing_prefer {
                         prefer.push(r);
                         if prefer.len() > MAX {
-                            return Err(serde::de::Error::custom(
-                                "too many extraction name resolution rules",
-                            ));
+                            return Err(serde::de::Error::custom("too many extraction name resolution rules"));
                         }
                     } else {
                         dislike.push(r);
                         if dislike.len() > MAX {
-                            return Err(serde::de::Error::custom(
-                                "too many extraction name resolution rules",
-                            ));
+                            return Err(serde::de::Error::custom("too many extraction name resolution rules"));
                         }
                     }
                 }

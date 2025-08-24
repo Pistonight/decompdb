@@ -94,7 +94,7 @@ impl Type0 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Type0Enum {
+pub struct Type0Enum {
     /// Base type, used to determine the size
     size_or_base: Result<u32, Goff>,
     /// Enumerators of the enum, in the order they appear in DWARF
@@ -102,7 +102,7 @@ struct Type0Enum {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Type0Union {
+pub struct Type0Union {
     // /// Base type, used to determine the size
     // size_or_base: Result<u32, Goff>,
     // /// Enumerators of the enum, in the order they appear in DWARF
@@ -130,11 +130,7 @@ impl<'i> CompUnit<'_, 'i> {
     }
 
     /// Load the type at the node. The node must be a type
-    pub fn load_type_at(
-        &self,
-        node: &Node<'i, '_, '_, '_>,
-        ctx: &mut LoadTypeCtx,
-    ) -> cu::Result<()> {
+    pub fn load_type_at(&self, node: &Node<'i, '_, '_, '_>, ctx: &mut LoadTypeCtx) -> cu::Result<()> {
         let entry = node.entry();
         let offset = self.entry_goff(entry);
         let ty = match entry.tag() {
@@ -146,17 +142,12 @@ impl<'i> CompUnit<'_, 'i> {
                     // std::nullptr_t
                     "decltype(nullptr)" => Type0::Prim(ctx.pointer_type),
                     _ => {
-                        cu::bail!(
-                            "unknown name for unspecified type: {name}, for entry at {offset}"
-                        );
+                        cu::bail!("unknown name for unspecified type: {name}, for entry at {offset}");
                     }
                 }
             }
             DW_TAG_typedef => {
-                match cu::check!(
-                    self.entry_type_offset_opt(entry),
-                    "failed to read typedef at {offset}"
-                )? {
+                match cu::check!(self.entry_type_offset_opt(entry), "failed to read typedef at {offset}")? {
                     // void
                     None => Type0::Prim(Prim::Void),
                     Some(local_off) => {
@@ -242,10 +233,7 @@ impl<'i> CompUnit<'_, 'i> {
                     } else {
                         // PTMD
                         let pointee_ty_goff = pointee_ty_loff.to_global(self.offset);
-                        Type0::Composite(TyTree::ptmd(
-                            this_ty_goff,
-                            TyTree::Base(Some(pointee_ty_goff)),
-                        ))
+                        Type0::Composite(TyTree::ptmd(this_ty_goff, TyTree::Base(Some(pointee_ty_goff))))
                     }
                 } else {
                     // PTMD to void
@@ -266,14 +254,9 @@ impl<'i> CompUnit<'_, 'i> {
             entry.attr_value(DW_AT_encoding),
             "failed to read DW_AT_encoding for primitive type at offset {offset}"
         )?;
-        let encoding = cu::check!(
-            encoding,
-            "missing DW_AT_encoding for primitive type at offset {offset}"
-        )?;
+        let encoding = cu::check!(encoding, "missing DW_AT_encoding for primitive type at offset {offset}")?;
         let AttributeValue::Encoding(encoding) = encoding else {
-            cu::bail!(
-                "expecting an Encoding attribute for DW_AT_encoding for primitive type at offset {offset}"
-            );
+            cu::bail!("expecting an Encoding attribute for DW_AT_encoding for primitive type at offset {offset}");
         };
         let byte_size = cu::check!(
             self.entry_unsigned_attr(entry, DW_AT_byte_size),
@@ -301,18 +284,14 @@ impl<'i> CompUnit<'_, 'i> {
             (DW_ATE_unsigned, 0x10) => Prim::U128,
             (DW_ATE_signed, 0x10) => Prim::I128,
             (DW_ATE_float, 0x10) => Prim::F128,
-            _ => {
-                cu::bail!("unknown primitive type. encoding: {encoding}, byte size: {byte_size}");
-            }
+
+            _ => cu::bail!("unknown primitive type. encoding: {encoding}, byte size: {byte_size}"),
         };
 
         Ok(prim)
     }
 
-    fn load_subroutine_types_from_entry(
-        &self,
-        entry: &Die<'i, '_, '_>,
-    ) -> cu::Result<Vec<TyTree<Option<Goff>>>> {
+    fn load_subroutine_types_from_entry(&self, entry: &Die<'i, '_, '_>) -> cu::Result<Vec<TyTree<Option<Goff>>>> {
         let offset = self.entry_goff(entry);
         let rettype_loff = cu::check!(
             self.entry_type_offset_opt(entry),
@@ -347,11 +326,7 @@ impl<'i> CompUnit<'_, 'i> {
         Ok(types)
     }
 
-    fn load_enum_type_from_entry(
-        &self,
-        entry: &Die<'i, '_, '_>,
-        ctx: &mut LoadTypeCtx,
-    ) -> cu::Result<Type0> {
+    fn load_enum_type_from_entry(&self, entry: &Die<'i, '_, '_>, ctx: &mut LoadTypeCtx) -> cu::Result<Type0> {
         let offset = self.entry_goff(entry);
         let name = cu::check!(
             self.namespaced_entry_name_opt(entry, &ctx.namespaces),
@@ -378,9 +353,7 @@ impl<'i> CompUnit<'_, 'i> {
                     "failed to get enum byte size at {offset}"
                 )?;
                 if byte_size > u32::MAX as u64 {
-                    cu::bail!(
-                        "enum at {offset} is too big (byte_size={byte_size}). This is unlikely to be correct"
-                    );
+                    cu::bail!("enum at {offset} is too big (byte_size={byte_size}). This is unlikely to be correct");
                 }
                 Ok(byte_size as u32)
             }
@@ -403,17 +376,12 @@ impl<'i> CompUnit<'_, 'i> {
                     enumerators.push((name.to_string(), value));
                 }
                 tag => {
-                    cu::bail!(
-                        "expecting all enum children entries to be DW_TAG_enumerator, but got {tag}"
-                    )
+                    cu::bail!("expecting all enum children entries to be DW_TAG_enumerator, but got {tag}")
                 }
             }
             Ok(())
         });
-        cu::check!(
-            result,
-            "failed to collect enumerators for enum type at {offset}"
-        )?;
+        cu::check!(result, "failed to collect enumerators for enum type at {offset}")?;
         let ty = match name {
             None => Type0::EnumAnon(Type0Enum {
                 size_or_base,
@@ -448,10 +416,7 @@ impl<'i> CompUnit<'_, 'i> {
     /// Read an attribute of a DIE, expecting a type offset, allowing it to be missing
     fn entry_type_offset_attr(&self, entry: &Die<'i, '_, '_>, attr: DwAt) -> cu::Result<Loff> {
         let offset = self.entry_goff(entry);
-        let type_value = cu::check!(
-            entry.attr_value(attr),
-            "failed to read {attr} at offset {offset}"
-        )?;
+        let type_value = cu::check!(entry.attr_value(attr), "failed to read {attr} at offset {offset}")?;
         let type_value = cu::check!(type_value, "missing {attr} for entry at offset {offset}")?;
         let type_offset = match type_value {
             AttributeValue::UnitRef(offset) => offset,
@@ -465,16 +430,9 @@ impl<'i> CompUnit<'_, 'i> {
     }
 
     /// Read an attribute of a DIE, expecting a type offset, allowing it to be missing
-    fn entry_type_offset_attr_opt(
-        &self,
-        entry: &Die<'i, '_, '_>,
-        attr: DwAt,
-    ) -> cu::Result<Option<Loff>> {
+    fn entry_type_offset_attr_opt(&self, entry: &Die<'i, '_, '_>, attr: DwAt) -> cu::Result<Option<Loff>> {
         let offset = self.entry_goff(entry);
-        let type_value = cu::check!(
-            entry.attr_value(attr),
-            "failed to read {attr} at offset {offset}"
-        )?;
+        let type_value = cu::check!(entry.attr_value(attr), "failed to read {attr} at offset {offset}")?;
         let Some(type_value) = type_value else {
             return Ok(None);
         };
@@ -491,10 +449,7 @@ impl<'i> CompUnit<'_, 'i> {
         let mut tree = self.tree_at(local_off)?;
         let root = tree.root()?;
         let mut children = root.children();
-        let subrange = cu::check!(
-            children.next(),
-            "failed to read child for entry at {offset}"
-        )?;
+        let subrange = cu::check!(children.next(), "failed to read child for entry at {offset}")?;
         let subrange = cu::check!(subrange, "expecting a child for entry at {offset}")?;
         let subrange = subrange.entry();
         if subrange.tag() != DW_TAG_subrange_type {

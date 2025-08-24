@@ -1,4 +1,3 @@
-
 /// A Generic Type Tree
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TyTree<Repr> {
@@ -6,7 +5,7 @@ pub enum TyTree<Repr> {
     ///
     /// TyYAML representation is `[ TYPE_ID ]`
     Base(Repr),
-    /// An array type 
+    /// An array type
     ///
     /// TyYAML representation is `[ TYPE_ID,[LEN] ]`
     Array(Box<Self>, usize),
@@ -14,7 +13,7 @@ pub enum TyTree<Repr> {
     ///
     /// TyYAML representation is `[ TYPE_ID,'*' ]`
     Ptr(Box<Self>),
-    /// A subroutine type 
+    /// A subroutine type
     ///
     /// TyYAML representation is `[ RET_TYPE_ID,'()',[ ARG_TYPE, ... ] ]`.
     /// Note that this must be wrapped
@@ -23,11 +22,11 @@ pub enum TyTree<Repr> {
     /// A pointer-to-member-data type
     ///
     /// TyYAML representation is `[ VALUE_TYPE_ID,CLASS_TYPE_ID,'::','*' ]`
-    Ptmd(Repr /*base*/, Box<Self>/*pointee*/),
+    Ptmd(Repr /*base*/, Box<Self> /*pointee*/),
     /// A pointer-to-member-function type
     ///
     /// TyYAML representation is `[ VALUE_TYPE_ID,CLASS_TYPE_ID,'::','()',[ ARG_TYPE, ...],'*' ]`
-    Ptmf(Repr /*base*/, Vec<Self>/*[retty, args]*/),
+    Ptmf(Repr /*base*/, Vec<Self> /*[retty, args]*/),
 }
 
 impl<Repr> TyTree<Repr> {

@@ -9,7 +9,7 @@ use cu::pre::*;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Ty {
     Prim(Prim),
-    Named(String)
+    Named(String),
 }
 
 impl From<Prim> for Ty {
@@ -38,17 +38,15 @@ impl std::fmt::Display for Ty {
     }
 }
 impl Serialize for Ty {
-    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error>
- {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         match self {
             Self::Prim(ty) => ty.serialize(ser),
-            Self::Named(name) => ser.serialize_str(&format!("\"{name}\""))
+            Self::Named(name) => ser.serialize_str(&format!("\"{name}\"")),
         }
     }
 }
 impl<'de> Deserialize<'de> for Ty {
-    fn deserialize<D: serde::Deserializer<'de>>(der: D) -> Result<Self, D::Error>
-    {
+    fn deserialize<D: serde::Deserializer<'de>>(der: D) -> Result<Self, D::Error> {
         struct Visitor;
         impl serde::de::Visitor<'_> for Visitor {
             type Value = Ty;
@@ -63,16 +61,19 @@ impl<'de> Deserialize<'de> for Ty {
             {
                 if v.starts_with('"') {
                     if !v.ends_with('"') {
-                        return Err(serde::de::Error::custom("malformated TYPE_ID in TyYAML TYPE"));
+                        return Err(serde::de::Error::custom(
+                            "malformated TYPE_ID in TyYAML TYPE",
+                        ));
                     }
-                    return Ok(Ty::Named(v[1..v.len()-1].to_string()))
+                    return Ok(Ty::Named(v[1..v.len() - 1].to_string()));
                 }
                 match Prim::from_str(v) {
                     Some(ty) => Ok(Ty::Prim(ty)),
-                    None => Err(serde::de::Error::custom("malformated TYPE_ID in TyYAML TYPE"))
+                    None => Err(serde::de::Error::custom(
+                        "malformated TYPE_ID in TyYAML TYPE",
+                    )),
                 }
             }
-
         }
 
         der.deserialize_str(Visitor)
@@ -151,10 +152,9 @@ impl Prim {
     }
 }
 
-
 impl std::fmt::Display for Prim {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-         self.to_str().fmt(f)
+        self.to_str().fmt(f)
     }
 }
 
