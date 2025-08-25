@@ -2,12 +2,12 @@ use std::path::{Path, PathBuf};
 
 use cu::pre::*;
 
-mod extract_resolution;
-pub use extract_resolution::*;
 use tyyaml::Prim;
 
-// mod util_contrib;
-// use util_contrib::*;
+mod extract_resolution;
+pub use extract_resolution::*;
+mod util;
+pub use util::*;
 
 /// Load config from a file
 pub fn load(path: impl AsRef<Path>) -> cu::Result<Config> {
@@ -56,6 +56,8 @@ pub struct CfgExtract {
     pub ptmf_repr: (Prim, u32),
     /// Rules for resolving type names
     pub name_resolution: CfgExtractResolution,
+    /// Regex for the virtual function pointer field
+    pub vfptr_field_regex: CfgRegex,
 }
 
 impl CfgExtract {

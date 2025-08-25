@@ -9,17 +9,21 @@ use crate::config::CfgExtract;
 use super::pre::*;
 
 impl<'i> CompUnit<'_, 'i> {
-    pub fn load_types(&self, config: &CfgExtract, namespaces: GoffMap<Namespace>) -> cu::Result<GoffMap<TypePiece>> {
+    pub fn load_types(
+        &self,
+        config: Arc<CfgExtract>,
+        namespaces: GoffMap<Namespace>,
+    ) -> cu::Result<GoffMap<TypePiece>> {
         let pointer_type = config.pointer_type()?;
         let mut ctx = LoadTypeCtx {
             pointer_type,
+            config,
             types: Default::default(),
             namespaces,
         };
+        cu::debug!("loading types for {self}");
         cu::check!(self.load_types_root(&mut ctx), "failed to load types for {self}")?;
         cu::debug!("loaded {} types for {self}", ctx.types.len());
-
-        // cu::trace!("types: {:#?}", ctx.types);
 
         Ok(ctx.types)
     }
@@ -306,7 +310,7 @@ impl<'i> CompUnit<'_, 'i> {
             Ok(())
         });
         cu::check!(result, "failed to collect enumerators for enum type at {offset}")?;
-        let ty_data = Type0Enum {
+        let ty_data = TypePieceEnum {
             byte_size_or_base,
             enumerators,
         };
@@ -390,7 +394,7 @@ impl<'i> CompUnit<'_, 'i> {
             Ok(())
         })?;
 
-        let ty_data = Type0Union { byte_size, members };
+        let ty_data = TypePieceUnion { byte_size, members };
         let ty = match name {
             None => TypePiece::UnionAnon(ty_data),
             Some(name) => TypePiece::Union(name, ty_data),
@@ -427,7 +431,7 @@ impl<'i> CompUnit<'_, 'i> {
         let byte_size = byte_size as u32;
 
         let mut vtable = TypePieceVtable::default();
-        let mut members = Vec::<Type0StructMember>::with_capacity(16);
+        let mut members = Vec::<TypePieceStructMember>::with_capacity(16);
 
         let result = self.entry_for_each_child(entry, |child| {
             let entry = child.entry();
@@ -435,7 +439,8 @@ impl<'i> CompUnit<'_, 'i> {
             match entry.tag() {
                 DW_TAG_member => {
                     if self.entry_is_extern(entry)? {
-                        cu::bail!("unexpected extern member at {offset}");
+                        // static member
+                        return Ok(());
                     }
                     // member might be anonymous union
                     let name = cu::check!(
@@ -457,13 +462,31 @@ impl<'i> CompUnit<'_, 'i> {
                         "member_offset is too big for member at {offset}. This is unlikely to be correct."
                     );
 
-                    let mut member = Type0StructMember {
-                        offset: member_offset as usize,
-                        name: name.map(Arc::from),
-                        ty: type_offset,
-                        is_base: false,
-                        bitfield_byte_size: None,
+                    // for vfptr fields, we change the loaded type to pointer primitive,
+                    // to reduce complexity. It is assumed that vfptr must be at offset 0,
+                    // since any other vptr field should be contained in the base class
+                    let mut member = if let Some(n) = name
+                        && ctx.config.vfptr_field_regex.is_match(n)
+                    {
+                        cu::ensure!(
+                            member_offset == 0,
+                            "unexpected vfptr field at non-zero offset, for member at {offset}"
+                        );
+                        TypePieceStructMember {
+                            offset: 0,
+                            name: None,
+                            ty: Goff::prim(ctx.pointer_type),
+                            special: Some(SpecialMember::Vfptr),
+                        }
+                    } else {
+                        TypePieceStructMember {
+                            offset: member_offset as usize,
+                            name: name.map(Arc::from),
+                            ty: type_offset,
+                            special: None,
+                        }
                     };
+
                     if cu::check!(
                         self.entry_unsigned_attr_opt(entry, DW_AT_bit_size),
                         "failed to check if struct member is bitfield at {offset}"
@@ -480,10 +503,11 @@ impl<'i> CompUnit<'_, 'i> {
                             bitfield_byte_size < u32::MAX as u64,
                             "bitfield_byte_size is too big for member at {offset}. This is unlikely to be correct."
                         );
-                        member.bitfield_byte_size = Some(bitfield_byte_size as u32);
+                        member.special = Some(SpecialMember::Bitfield(bitfield_byte_size as u32));
                         // can merge with last member if it's the same bitfield
                         if let Some(prev) = members.last_mut() {
-                            if prev.offset == member.offset && prev.bitfield_byte_size.is_some() {
+                            if prev.offset == member.offset && matches!(prev.special, Some(SpecialMember::Bitfield(_)))
+                            {
                                 *prev = member;
                                 return Ok(());
                             }
@@ -506,12 +530,11 @@ impl<'i> CompUnit<'_, 'i> {
                     )?;
                     let type_loff = cu::check!(type_loff, "unexpected void-typed struct base class at {offset}")?;
                     let type_offset = self.goff(type_loff);
-                    members.push(Type0StructMember {
+                    members.push(TypePieceStructMember {
                         offset: member_offset as usize,
                         name: None, // we will assign name to base members later
                         ty: type_offset,
-                        is_base: true,
-                        bitfield_byte_size: None,
+                        special: Some(SpecialMember::Base),
                     });
                 }
                 DW_TAG_subprogram => {
@@ -555,7 +578,35 @@ impl<'i> CompUnit<'_, 'i> {
         });
         cu::check!(result, "failed to process struct data for entry at {offset}")?;
 
-        let ty_data = Type0Struct {
+        // members may not come sorted by offset, we do that now
+        // and ensure no duplicates
+        // we can look for empty base optimization right here
+        // since we will know if another member is placed at the same location.
+        // this sort put base after other members
+        members.sort_by_key(|x| x.is_base());
+        members.sort_by_key(|x| x.offset);
+        let mut conflicting_member_offset = None;
+        let mut prev_offset = usize::MAX;
+        members.retain(|member| {
+            if member.offset == prev_offset {
+                if member.is_base() {
+                    // empty-base optimization: remove the base class field completely
+                    // note that this is fine since empty base also means the base
+                    // has no vtable
+                    return false;
+                }
+                if conflicting_member_offset.is_none() {
+                    conflicting_member_offset = Some(prev_offset);
+                }
+            }
+            prev_offset = member.offset;
+            true
+        });
+        if let Some(x) = conflicting_member_offset {
+            cu::bail!("found multiple members at the same offset 0x{x:x} for struct at {offset}: {members:#?}");
+        }
+
+        let ty_data = TypePieceStruct {
             byte_size,
             members,
             vtable,
@@ -643,6 +694,7 @@ impl<'i> CompUnit<'_, 'i> {
 
 struct LoadTypeCtx {
     pointer_type: Prim,
+    config: Arc<CfgExtract>,
     types: GoffMap<TypePiece>,
     namespaces: GoffMap<Namespace>,
 }
@@ -657,21 +709,21 @@ pub enum TypePiece {
     /// Alias to another type (basically typedef without a name)
     Alias(Goff),
     /// Enum
-    Enum(String, Type0Enum),
+    Enum(String, TypePieceEnum),
     /// Anonymous Enum
-    EnumAnon(Type0Enum),
+    EnumAnon(TypePieceEnum),
     /// Declaration of enum
     EnumDecl(String),
     /// Union
-    Union(String, Type0Union),
+    Union(String, TypePieceUnion),
     /// Anonymous Union
-    UnionAnon(Type0Union),
+    UnionAnon(TypePieceUnion),
     /// Declaration of union
     UnionDecl(String),
     /// Struct or Class
-    Struct(String, Type0Struct),
+    Struct(String, TypePieceStruct),
     /// Anonymous Struct
-    StructAnon(Type0Struct),
+    StructAnon(TypePieceStruct),
     /// Declaration of struct or class
     StructDecl(String),
     /// Composition of other types
@@ -688,7 +740,7 @@ impl TypePiece {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Type0Enum {
+pub struct TypePieceEnum {
     /// Base type, used to determine the size
     pub byte_size_or_base: Result<u32, Goff>,
     /// Enumerators of the enum, in the order they appear in DWARF
@@ -696,7 +748,7 @@ pub struct Type0Enum {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Type0Union {
+pub struct TypePieceUnion {
     /// Byte size of the union (should be size of the largest member)
     pub byte_size: u32,
     /// (name, type) of the union members
@@ -705,25 +757,36 @@ pub struct Type0Union {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Type0Struct {
+pub struct TypePieceStruct {
     /// Byte size of the struct
     pub byte_size: u32,
     pub vtable: TypePieceVtable,
-    pub members: Vec<Type0StructMember>,
+    pub members: Vec<TypePieceStructMember>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Type0StructMember {
+pub struct TypePieceStructMember {
     /// Offset of the member within the struct
     pub offset: usize,
     /// Name of the member. Could be None for anonymous union as member
     pub name: Option<Arc<str>>,
     /// Type of the member
     pub ty: Goff,
-    /// If the member is a base class
-    pub is_base: bool,
-    /// If the member is a bitfield, and the byte size
-    pub bitfield_byte_size: Option<u32>,
+    /// Special-case member
+    pub special: Option<SpecialMember>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpecialMember {
+    Base,
+    Vfptr,
+    Bitfield(u32), // byte_size
+}
+
+impl TypePieceStructMember {
+    pub fn is_base(&self) -> bool {
+        matches!(self.special, Some(SpecialMember::Base))
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

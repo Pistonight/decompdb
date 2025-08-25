@@ -1,18 +1,20 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use spin::RwLock as SpinRwLock;
 
-use crate::config::CfgExtractResolutionRules;
+use crate::config::CfgExtract;
 
+#[derive(Clone)]
 pub struct NameComparator {
-    rules: CfgExtractResolutionRules,
-    cache: SpinRwLock<BTreeMap<String, usize>>,
+    config: Arc<CfgExtract>,
+    cache: Arc<SpinRwLock<BTreeMap<String, usize>>>,
 }
 
 impl NameComparator {
-    pub fn new(rules: CfgExtractResolutionRules) -> Self {
+    pub fn new(config: Arc<CfgExtract>) -> Self {
         Self {
-            rules,
+            config,
             cache: Default::default(),
         }
     }
@@ -23,13 +25,13 @@ impl NameComparator {
 
     pub fn get_key(&self, name: &str) -> usize {
         let read_guard = match self.cache.try_upgradeable_read() {
-            None => return self.rules.get_sort_key(name),
+            None => return self.config.name_resolution.rules.get_sort_key(name),
             Some(g) => g,
         };
         if let Some(x) = read_guard.get(name) {
             return *x;
         }
-        let value = self.rules.get_sort_key(name);
+        let value = self.config.name_resolution.rules.get_sort_key(name);
         if let Ok(mut write_guard) = read_guard.try_upgrade() {
             write_guard.insert(name.to_string(), value);
         }

@@ -14,7 +14,7 @@ pub static OPTIMIZERS: [fn(&mut TypeUnitCompiler) -> cu::Result<bool>];
 
 /// Flatten nested type tree to its most pritimive types
 #[distributed_slice(OPTIMIZERS)]
-pub fn optimize_flatten_trees(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
+fn optimize_flatten_trees(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
     fn get_flattened_tree_recur(
         tree: &TyTree<Cell<Goff>>,
         buckets: &BucketMap<Goff, TypeUnit>,
@@ -117,7 +117,7 @@ pub fn optimize_flatten_trees(compiler: &mut TypeUnitCompiler) -> cu::Result<boo
 }
 
 #[distributed_slice(OPTIMIZERS)]
-pub fn optimize_equivalent_trees(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
+fn optimize_equivalent_trees(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
     let mut changed = false;
 
     let mut prims = BTreeSet::new();
@@ -227,7 +227,7 @@ pub fn optimize_equivalent_trees(compiler: &mut TypeUnitCompiler) -> cu::Result<
 
 /// Flatten the union if it only has one member, and is non-recursive
 #[distributed_slice(OPTIMIZERS)]
-pub fn optimize_single_member_union(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
+fn optimize_single_member_union(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
     let mut changed = false;
     for bucket in compiler.compiled.buckets() {
         let unit = &bucket.value;
@@ -254,7 +254,7 @@ pub fn optimize_single_member_union(compiler: &mut TypeUnitCompiler) -> cu::Resu
 
 /// If a union has 2 members of the same size, pick one
 #[distributed_slice(OPTIMIZERS)]
-pub fn optimize_two_members_union(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
+fn optimize_two_members_union(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
     let mut changed = false;
     let mut to_check = vec![];
     for bucket in compiler.compiled.buckets() {
@@ -337,7 +337,7 @@ pub fn optimize_two_members_union(compiler: &mut TypeUnitCompiler) -> cu::Result
 
 /// Flatten the struct if it only has one member, and is non-recursive and non-virtual
 #[distributed_slice(OPTIMIZERS)]
-pub fn optimize_single_member_struct(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
+fn optimize_single_member_struct(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
     let mut changed = false;
     for bucket in compiler.compiled.buckets() {
         let unit = &bucket.value;
@@ -357,11 +357,50 @@ pub fn optimize_single_member_struct(compiler: &mut TypeUnitCompiler) -> cu::Res
             if let Some(member_data) = &member_type_unit.value.data {
                 if !member_data.is_recursive_to(bucket_key) {
                     compiler.merges.push((bucket_key, member_type));
-                    // compiler.merges.push((member_type, bucket_key));
                     changed = true;
                 }
             }
         }
+    }
+    Ok(changed)
+}
+
+/// Inline the base struct members, if the derived class only has one field
+/// that is the base class
+#[distributed_slice(OPTIMIZERS)]
+fn optimize_single_base_member_struct(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
+    let mut changed = false;
+    for bucket in compiler.compiled.buckets() {
+        let unit = &bucket.value;
+        let Some(TypeUnitData::Struct(data)) = &unit.data else {
+            continue;
+        };
+        if data.members.len() != 1 {
+            continue;
+        }
+        let member = &data.members[0];
+        if !member.is_base() {
+            continue;
+        }
+        let bucket_key = bucket.canonical_key();
+        let base_type = data.members[0].ty.get();
+        let base_type_unit = compiler.compiled.get_unwrap(base_type)?;
+        let Some(base_data) = &base_type_unit.value.data else {
+            continue;
+        };
+        let members = if let TypeUnitData::Struct(base_data) = base_data {
+            cu::ensure!(
+                base_data.byte_size == data.byte_size,
+                "unexpected single base member struct having different size than its base member"
+            );
+            base_data.members.clone()
+        } else {
+            continue;
+        };
+        let mut new_data = data.clone();
+        new_data.members = members;
+        compiler.changes.insert(bucket_key, TypeUnitData::Struct(new_data));
+        changed = true;
     }
     Ok(changed)
 }

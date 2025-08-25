@@ -1,5 +1,7 @@
 #![allow(non_upper_case_globals)]
 
+use std::sync::Arc;
+
 use cu::pre::*;
 
 use crate::config::Config;
@@ -7,17 +9,17 @@ use crate::config::Config;
 mod bucket;
 pub use bucket::*;
 mod compilation_unit;
-mod type_compiler;
-mod type_optimizer;
 pub use compilation_unit::*;
 mod dwarf_types;
 use dwarf_types::*;
 mod namespace;
 pub use namespace::*;
-mod type_defn;
-use type_defn::*;
 mod name_comparator;
 use name_comparator::*;
+
+mod type_compiler;
+mod type_loader;
+mod type_optimizer;
 
 mod pre {
     pub use super::dwarf_types::*;
@@ -34,7 +36,8 @@ pub struct CmdExtract {
 }
 
 pub fn run(config: Config) -> cu::Result<()> {
-    let name_comparator = NameComparator::new(config.extract.name_resolution.rules.clone());
+    let extract_config = Arc::new(config.extract);
+    let name_comparator = NameComparator::new(Arc::clone(&extract_config));
     let bytes = cu::fs::read(&config.paths.elf)?;
     let dwarf = parse_dwarf(&bytes)?;
 
@@ -50,17 +53,17 @@ pub fn run(config: Config) -> cu::Result<()> {
 
     cu::info!("found {} compilation units", units.len());
 
-    let unit = &units[1];
+    let unit = units.iter().find(|x| x.name.contains("PauseMenuDataMgr")).unwrap();
 
     cu::info!("unit: {unit}");
 
     let ns = unit.load_namespaces()?;
 
-    let types = unit.load_types(&config.extract, ns)?;
+    let types = unit.load_types(Arc::clone(&extract_config), ns)?;
     cu::debug!("type count: {}", types.len());
     // cu::trace!("types: {types:#?}");
 
-    let compiled_types = type_compiler::compile_types(types, &config.extract)?;
+    let compiled_types = type_compiler::compile_types(types, Arc::clone(&extract_config))?;
     cu::debug!("compiled type count: {}", compiled_types.buckets().count());
 
     Ok(())

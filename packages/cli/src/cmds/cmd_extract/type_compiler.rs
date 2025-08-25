@@ -7,16 +7,17 @@ use tyyaml::{Prim, TyTree};
 
 use crate::config::CfgExtract;
 
-use super::{BucketMap, BucketValue, TypePiece, TypePieceVtable, pre::*};
+use super::pre::*;
+use super::type_loader::{SpecialMember, TypePiece, TypePieceStruct, TypePieceUnion, TypePieceVtable};
+use super::{BucketMap, BucketValue};
 
-pub fn compile_types(types: GoffMap<TypePiece>, config: &CfgExtract) -> cu::Result<BucketMap<Goff, TypeUnit>> {
+pub fn compile_types(types: GoffMap<TypePiece>, config: Arc<CfgExtract>) -> cu::Result<BucketMap<Goff, TypeUnit>> {
     TypeUnitCompiler::try_new(types, config)?.compile()
 }
 
 pub struct TypeUnitCompiler {
+    pub config: Arc<CfgExtract>,
     pub pointer_type: Prim,
-    pub ptmd_type: (Prim, u32),
-    pub ptmf_type: (Prim, u32),
     pub types: GoffMap<TypePiece>,
     pub compiled: BucketMap<Goff, TypeUnit>,
     pub sizes: GoffMap<Option<u32>>,
@@ -24,7 +25,7 @@ pub struct TypeUnitCompiler {
     pub changes: GoffMap<TypeUnitData>,
 }
 impl TypeUnitCompiler {
-    fn try_new(mut types: GoffMap<TypePiece>, config: &CfgExtract) -> cu::Result<Self> {
+    fn try_new(mut types: GoffMap<TypePiece>, config: Arc<CfgExtract>) -> cu::Result<Self> {
         // replace TyTree::Base with typedef
         {
             let mut replacement = Vec::with_capacity(types.len());
@@ -44,8 +45,7 @@ impl TypeUnitCompiler {
 
         let self_ = Self {
             pointer_type: config.pointer_type()?,
-            ptmd_type: config.ptmd_repr,
-            ptmf_type: config.ptmf_repr,
+            config,
             types,
             compiled: Default::default(),
             sizes: Default::default(),
@@ -396,8 +396,14 @@ impl TypeUnitCompiler {
             }
             TyTree::Ptr(_) => Ok(self.pointer_type.byte_size()),
             TyTree::Sub(_) => Ok(None),
-            TyTree::Ptmd(_, _) => Ok(self.ptmd_type.0.byte_size().map(|x| x * self.ptmd_type.1)),
-            TyTree::Ptmf(_, _) => Ok(self.ptmf_type.0.byte_size().map(|x| x * self.ptmf_type.1)),
+            TyTree::Ptmd(_, _) => {
+                let (ty, len) = self.config.ptmd_repr;
+                Ok(ty.byte_size().map(|x| x * len))
+            }
+            TyTree::Ptmf(_, _) => {
+                let (ty, len) = self.config.ptmf_repr;
+                Ok(ty.byte_size().map(|x| x * len))
+            }
         }
     }
     fn compile_vtable(&self, goff: Goff) -> cu::Result<Option<TypeUnitStructVtable>> {
@@ -427,7 +433,7 @@ impl TypeUnitCompiler {
         };
 
         // find the first base member
-        let vtable = match struct_data.members.iter().find(|x| x.is_base) {
+        let vtable = match struct_data.members.iter().find(|x| x.is_base()) {
             Some(base_member) => {
                 if base_member.offset != 0 {
                     cu::bail!("unexpected non-zero offset first base member for struct at {goff}");
@@ -631,7 +637,7 @@ pub struct TypeUnitUnion {
     pub members: Vec<(Option<Arc<str>>, Cell<Goff>)>,
 }
 impl TypeUnitUnion {
-    pub fn new(data: &super::Type0Union) -> Self {
+    pub fn new(data: &TypePieceUnion) -> Self {
         let byte_size = data.byte_size;
         let members = data
             .members
@@ -655,7 +661,7 @@ pub struct TypeUnitStruct {
     pub members: Vec<TypeUnitStructMember>,
 }
 impl TypeUnitStruct {
-    pub fn new(data: &super::Type0Struct, vtable: TypeUnitStructVtable) -> Self {
+    pub fn new(data: &TypePieceStruct, vtable: TypeUnitStructVtable) -> Self {
         let byte_size = data.byte_size;
         let members = data
             .members
@@ -664,8 +670,7 @@ impl TypeUnitStruct {
                 offset: member.offset,
                 name: member.name.clone(),
                 ty: Cell::new(member.ty),
-                is_base: member.is_base,
-                bitfield_byte_size: member.bitfield_byte_size,
+                special: member.special.clone(),
             })
             .collect();
         Self {
@@ -684,15 +689,42 @@ pub struct TypeUnitStructMember {
     pub name: Option<Arc<str>>,
     /// Type of the member
     pub ty: Cell<Goff>,
-    /// If the member is a base class
-    pub is_base: bool,
-    /// If the member is a bitfield, and the byte size
-    pub bitfield_byte_size: Option<u32>,
+    /// Special-case member
+    pub special: Option<SpecialMember>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+impl TypeUnitStructMember {
+    pub fn is_base(&self) -> bool {
+        matches!(self.special, Some(SpecialMember::Base))
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct TypeUnitStructVtable {
     pub entries: Vec<TypeUnitStructVentry>,
+}
+
+impl PartialEq for TypeUnitStructVtable {
+    fn eq(&self, other: &Self) -> bool {
+        if self.entries.len() != other.entries.len() {
+            return false;
+        }
+        for (a, b) in std::iter::zip(self.entries.iter(), other.entries.iter()) {
+            if a.name != b.name {
+                return false;
+            }
+
+            // note we don't need to compare the function pointer type,
+            // since that could vary per-vtable
+
+            // do we need this? (have it for now to avoid incorrect merges)
+            if a.is_from_base != b.is_from_base {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -814,12 +846,15 @@ impl TypeUnitStructVtableTemp {
             }
         }
         let i = placement;
-        let d0name = Arc::from(format!("{}D0", vdtor.name).as_str());
-        let d1name = Arc::from(format!("{}D1", vdtor.name).as_str());
+        // if we know this entry in the vtable is a dtor, then we don't
+        // really care what the name is. So, we change the vtable entry
+        // name to ~dtorD0 and ~dtorD1. This allows us to merge types
+        // that are equivalent, except for the name of the dtor
+        // (which depends on the type name)
         let mut d0 = vdtor.clone();
-        d0.name = d0name;
+        d0.name = Arc::from("~dtorD0");
         self.ensure(i + 1).replace(d0);
-        vdtor.name = d1name;
+        vdtor.name = Arc::from("~dtorD1");
         self.ensure(i).replace(vdtor);
     }
 }
