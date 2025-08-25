@@ -77,6 +77,11 @@ impl<'d, 'i> CompUnit<'d, 'i> {
     }
 
     /// Get the DW_AT_name of a DIE
+    pub fn entry_name_owned(&self, entry: &Die<'i, '_, '_>) -> cu::Result<String> {
+        Ok(self.entry_name(entry)?.to_string())
+    }
+
+    /// Get the DW_AT_name of a DIE
     pub fn entry_name(&self, entry: &Die<'i, '_, '_>) -> cu::Result<&'i str> {
         let offset = self.entry_goff(entry);
         let value = cu::check!(
@@ -85,6 +90,11 @@ impl<'d, 'i> CompUnit<'d, 'i> {
         )?;
         let value = cu::check!(value, "DW_AT_name is missing for entry at offset {offset} in {self}")?;
         self.attr_string(value)
+    }
+
+    /// Get the DW_AT_name of a DIE, if it exists
+    pub fn entry_name_owned_opt(&self, entry: &Die<'i, '_, '_>) -> cu::Result<Option<String>> {
+        Ok(self.entry_name_opt(entry)?.map(|x| x.to_string()))
     }
 
     /// Get the DW_AT_name of a DIE, if it exists
@@ -104,6 +114,11 @@ impl<'d, 'i> CompUnit<'d, 'i> {
     /// Get the global offset of a DIE
     pub fn entry_goff(&self, entry: &Die<'i, '_, '_>) -> Goff {
         (entry.offset().0 + usize::from(self.offset)).into()
+    }
+
+    /// Convert local offset in this compilation unit to global offset
+    pub fn goff(&self, loff: Loff) -> Goff {
+        loff.to_global(self.offset)
     }
 
     /// Get an attribute value as string
@@ -183,16 +198,18 @@ impl<'d, 'i> CompUnit<'d, 'i> {
 
     /// Get if the entry is a declaration
     pub fn entry_is_decl(&self, entry: &Die<'i, '_, '_>) -> cu::Result<bool> {
+        self.entry_attr_flag(entry, DW_AT_declaration)
+    }
+
+    /// Get an attr of an entry as flag
+    pub fn entry_attr_flag(&self, entry: &Die<'i, '_, '_>, attr: DwAt) -> cu::Result<bool> {
         let offset = self.entry_goff(entry);
-        let value = cu::check!(
-            entry.attr_value(DW_AT_declaration),
-            "failed to read DW_AT_declaration at {offset}"
-        )?;
+        let value = cu::check!(entry.attr_value(attr), "failed to read {attr} at {offset}")?;
         match value {
             None => Ok(false),
             Some(AttributeValue::Flag(x)) => Ok(x),
             _ => {
-                cu::bail!("expecting DW_AT_declaration to be a Flag, at entry {offset}");
+                cu::bail!("expecting {attr} to be a Flag, at entry {offset}");
             }
         }
     }

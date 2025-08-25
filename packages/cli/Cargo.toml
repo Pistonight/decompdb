@@ -10,6 +10,7 @@ cu = { workspace = true, features = ["cli", "process", "toml", "derive"] }
 elf = "0.8.0"
 fxhash = "0.2.1"
 gimli = "0.32.1"
+linkme = "0.3.33"
 regex = "1.11.1"
 serde = "1"
 spin = "0.10.0"

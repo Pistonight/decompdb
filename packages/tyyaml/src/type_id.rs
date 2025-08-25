@@ -105,6 +105,26 @@ pub enum Prim {
 }
 
 impl Prim {
+    pub fn iter() -> impl Iterator<Item = Prim> {
+        [
+            Self::Void,
+            Self::Bool,
+            Self::U8,
+            Self::U16,
+            Self::U32,
+            Self::U64,
+            Self::U128,
+            Self::I8,
+            Self::I16,
+            Self::I32,
+            Self::I64,
+            Self::I128,
+            Self::F32,
+            Self::F64,
+            Self::F128,
+        ]
+        .into_iter()
+    }
     /// Convert self to string representation
     ///
     /// The `to_str`, `to_string` (`Display`), `serde::Serialize` to YAML, and the TyYAML representation,
@@ -148,6 +168,26 @@ impl Prim {
             "f64" => Prim::F64,
             "f128" => Prim::F128,
             _ => return None,
+        })
+    }
+
+    pub const fn byte_size(self) -> Option<u32> {
+        Some(match self {
+            Prim::Void => return None,
+            Prim::Bool => 1,
+            Prim::U8 => 1,
+            Prim::U16 => 2,
+            Prim::U32 => 4,
+            Prim::U64 => 8,
+            Prim::U128 => 16,
+            Prim::I8 => 1,
+            Prim::I16 => 2,
+            Prim::I32 => 4,
+            Prim::I64 => 8,
+            Prim::I128 => 16,
+            Prim::F32 => 4,
+            Prim::F64 => 8,
+            Prim::F128 => 16,
         })
     }
 }

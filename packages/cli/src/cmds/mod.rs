@@ -1,8 +1,6 @@
 use cu::pre::*;
 
 mod cmd_extract;
-use cmd_extract::*;
-use derive_more::AsRef;
 
 #[derive(clap::Parser, AsRef)]
 pub struct CmdMain {
@@ -15,15 +13,9 @@ pub struct CmdMain {
     pub cmd: CmdSubcommand,
 }
 
-// impl AsRef<cu::cli::Flags> for CmdMain {
-//     fn as_ref(&self) -> &cu::cli::Flags {
-//         self.cmd.as_ref()
-//     }
-// }
-
 #[derive(clap::Subcommand)]
 pub enum CmdSubcommand {
-    Extract(CmdExtract),
+    Extract(cmd_extract::CmdExtract),
 }
 
 impl AsRef<cu::cli::Flags> for CmdSubcommand {
@@ -38,6 +30,6 @@ pub fn main(args: CmdMain) -> cu::Result<()> {
     let config = crate::config::load(args.config)?;
 
     match args.cmd {
-        CmdSubcommand::Extract(cmd) => cmd.run(config),
+        CmdSubcommand::Extract(_) => cmd_extract::run(config),
     }
 }

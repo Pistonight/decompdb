@@ -2,7 +2,7 @@ use cu::pre::*;
 use regex::Regex;
 
 /// Config for name resolution for the extract command
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct CfgExtractResolution {
     /// Rules for name resolutions
@@ -42,7 +42,7 @@ impl CfgExtractResolution {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CfgExtractResolutionRules {
     /// Pattern for preferrence, from more preferred to less preferred
     pub prefer: Vec<Regex>,

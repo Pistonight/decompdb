@@ -13,3 +13,20 @@ path = "../../../botw-decomp/data/data_symbols.csv"
 base-address = 0x7100000000
 address-column = 0 
 symbol-column = 1
+
+[extract]
+pointer-width = 64
+ptmd-repr = ["u64", 1]
+ptmf-repr = ["u64", 2]
+
+[extract.name-resolution]
+rules = []
+test = []
+
+# [extract.type-optimizer.opaque-if]
+# name-is = [
+#     "std::__va_list"
+# ]
+# struct-member-name-contains = [
+#     "__clang"
+# ]

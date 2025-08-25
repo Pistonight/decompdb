@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use cu::pre::*;
 
 use gimli::constants::*;
+use tyyaml::Prim;
 
 // convienience type aliases
 pub type In<'i> = gimli::EndianSlice<'i, gimli::LittleEndian>;
@@ -18,10 +19,11 @@ pub type GoffMap<T> = BTreeMap<Goff, T>;
 /// Local offset into a Compilation Unit in DWARF
 #[rustfmt::skip]
 #[derive(
-    Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord,
+    DebugCustom, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord,
     Into, Display
 )]
 #[display("local(0x{:08x})", self.0)]
+#[debug("local(0x{:08x})", self.0)]
 pub struct Loff(usize);
 
 impl From<gimli::UnitOffset<usize>> for Loff {
@@ -47,15 +49,39 @@ impl Loff {
 /// Global offset into DWARF
 #[rustfmt::skip]
 #[derive(
-    Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord,
+    DebugCustom, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord,
     From, Into, Display
 )]
 #[display("0x{:08x}", self.0)]
+#[debug("0x{:08x}", self.0)]
 pub struct Goff(usize);
 
+impl Goff {
+    /// Get a fabricated global offset for primitive types
+    pub const fn prim(p: Prim) -> Self {
+        let s = match p {
+            Prim::Void => 0x1FFFF0000,
+            Prim::Bool => 0x1FFFF0001,
+            Prim::U8 => 0x1FFFF0101,
+            Prim::U16 => 0x1FFFF0102,
+            Prim::U32 => 0x1FFFF0104,
+            Prim::U64 => 0x1FFFF0108,
+            Prim::U128 => 0x1FFFF0110,
+            Prim::I8 => 0x1FFFF0201,
+            Prim::I16 => 0x1FFFF0202,
+            Prim::I32 => 0x1FFFF0204,
+            Prim::I64 => 0x1FFFF0208,
+            Prim::I128 => 0x1FFFF0210,
+            Prim::F32 => 0x1FFFF0304,
+            Prim::F64 => 0x1FFFF0308,
+            Prim::F128 => 0x1FFFF0310,
+        };
+        Self(s)
+    }
+}
+
 pub fn is_type_tag(tag: Tag) -> bool {
-    matches!(
-        tag,
+    match tag {
         DW_TAG_structure_type
         | DW_TAG_class_type
         | DW_TAG_union_type
@@ -75,6 +101,9 @@ pub fn is_type_tag(tag: Tag) -> bool {
         | DW_TAG_subroutine_type
         | DW_TAG_ptr_to_member_type
         // base
-        | DW_TAG_base_type
-    )
+        | DW_TAG_base_type => true,
+
+        // this is to prevent constants above from being interpreted as variable ident
+        _tag => false
+    }
 }

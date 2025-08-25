@@ -4,7 +4,11 @@ use cu::pre::*;
 
 use crate::config::Config;
 
+mod bucket;
+pub use bucket::*;
 mod compilation_unit;
+mod type_compiler;
+mod type_optimizer;
 pub use compilation_unit::*;
 mod dwarf_types;
 use dwarf_types::*;
@@ -29,14 +33,8 @@ pub struct CmdExtract {
     pub common: cu::cli::Flags,
 }
 
-impl CmdExtract {
-    pub fn run(self, config: Config) -> cu::Result<()> {
-        run(config)
-    }
-}
-
-fn run(config: Config) -> cu::Result<()> {
-    let name_comparator = NameComparator::new(config.extract.name_resolution.rules);
+pub fn run(config: Config) -> cu::Result<()> {
+    let name_comparator = NameComparator::new(config.extract.name_resolution.rules.clone());
     let bytes = cu::fs::read(&config.paths.elf)?;
     let dwarf = parse_dwarf(&bytes)?;
 
@@ -52,11 +50,18 @@ fn run(config: Config) -> cu::Result<()> {
 
     cu::info!("found {} compilation units", units.len());
 
-    let unit = &units[0];
+    let unit = &units[1];
 
     cu::info!("unit: {unit}");
 
     let ns = unit.load_namespaces()?;
+
+    let types = unit.load_types(&config.extract, ns)?;
+    cu::debug!("type count: {}", types.len());
+    // cu::trace!("types: {types:#?}");
+
+    let compiled_types = type_compiler::compile_types(types, &config.extract)?;
+    cu::debug!("compiled type count: {}", compiled_types.buckets().count());
 
     Ok(())
 }
