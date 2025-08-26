@@ -8,7 +8,7 @@ pub struct BucketMap<K, V> {
 
 pub struct Bucket<K, V> {
     canonical: K,
-    other_keys: BTreeSet<K>,
+    pub other_keys: BTreeSet<K>,
     pub value: V,
 }
 
@@ -29,8 +29,32 @@ impl<K: Copy + PartialEq + Ord + std::fmt::Display, V: BucketValue> BucketMap<K,
     }
 
     pub fn get_mut(&mut self, key: K) -> Option<&mut V> {
+        self.bucket_mut(key).map(|(_, x)| &mut x.value)
+    }
+
+    fn bucket_mut(&mut self, key: K) -> Option<(usize, &mut Bucket<K, V>)> {
         let index = *self.key_to_index.get(&key)?;
-        Some(&mut self.buckets.get_mut(index)?.as_mut()?.value)
+        self.buckets.get_mut(index)?.as_mut().map(|x| (index, x))
+    }
+
+    pub fn add_key(&mut self, key: K, new_key: K) -> cu::Result<()> {
+        let (i, bucket) = cu::check!(self.bucket_mut(key), "error in add_key: cannot find bucket with key {key}")?;
+        bucket.other_keys.insert(new_key);
+        self.key_to_index.insert(new_key, i);
+        Ok(())
+    }
+
+    pub fn remove(&mut self, key: K) -> Option<Bucket<K, V>> {
+        let index = *self.key_to_index.get(&key)?;
+        let bucket = self.buckets.get_mut(index)?;
+        let bucket = bucket.take();
+        if let Some(bucket) = &bucket {
+            self.key_to_index.remove(&bucket.canonical_key());
+            for k in &bucket.other_keys {
+                self.key_to_index.remove(k);
+            }
+        }
+        bucket
     }
 
     pub fn buckets(&self) -> impl Iterator<Item = &Bucket<K, V>> {
@@ -46,6 +70,10 @@ impl<K: Copy + PartialEq + Ord + std::fmt::Display, V: BucketValue> BucketMap<K,
 
     /// Insert a new bucket with key. error if the key is already pointing to a bucket
     pub fn insert_new(&mut self, key: K, value: V) -> cu::Result<()> {
+        self.insert_new_internal(key, value)?;
+        Ok(())
+    }
+    fn insert_new_internal(&mut self, key: K, value: V) -> cu::Result<usize> {
         use std::collections::btree_map::Entry;
         match self.key_to_index.entry(key) {
             Entry::Vacant(e) => {
@@ -64,7 +92,7 @@ impl<K: Copy + PartialEq + Ord + std::fmt::Display, V: BucketValue> BucketMap<K,
                     }
                 };
                 e.insert(new_index);
-                Ok(())
+                Ok(new_index)
             }
             Entry::Occupied(_) => {
                 cu::bail!("key {key} is already in a bucket!");
@@ -132,6 +160,17 @@ impl<K: Copy + PartialEq + Ord + std::fmt::Display, V: BucketValue> BucketMap<K,
         bucket.value.absorb(value)?;
         self.key_to_index.insert(from, index);
 
+        Ok(())
+    }
+
+    /// Extend this map with another. The 2 maps must have disjoint key sets
+    pub fn extend(&mut self, other: Self) -> cu::Result<()> {
+        for bucket in other.buckets.into_iter().flatten() {
+            let i = self.insert_new_internal(bucket.canonical_key(), bucket.value).context("error in extend: the 2 maps have overlapping key sets")?;
+            for key in bucket.other_keys {
+                self.key_to_index.insert(key, i);
+            }
+        }
         Ok(())
     }
 }

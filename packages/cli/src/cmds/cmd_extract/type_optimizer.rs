@@ -7,14 +7,14 @@ use tyyaml::TyTree;
 
 use super::BucketMap;
 use super::pre::*;
-use super::type_compiler::{TypeUnit, TypeUnitCompiler, TypeUnitData};
+use super::type_compiler::{TypeUnit, TypeCompilerUnit, TypeUnitData};
 
 #[distributed_slice]
-pub static OPTIMIZERS: [fn(&mut TypeUnitCompiler) -> cu::Result<bool>];
+pub static OPTIMIZERS: [fn(&mut TypeCompilerUnit) -> cu::Result<bool>];
 
 /// Flatten nested type tree to its most pritimive types
 #[distributed_slice(OPTIMIZERS)]
-fn optimize_flatten_trees(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
+fn optimize_flatten_trees(compiler: &mut TypeCompilerUnit) -> cu::Result<bool> {
     fn get_flattened_tree_recur(
         tree: &TyTree<Cell<Goff>>,
         buckets: &BucketMap<Goff, TypeUnit>,
@@ -34,19 +34,40 @@ fn optimize_flatten_trees(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
                 }
             }
             TyTree::Ptr(inner) => {
-                if let Some(inner_flatten) = get_flattened_tree_recur(inner, buckets, depth + 1)? {
+                let inner_flatten = cu::check!(
+get_flattened_tree_recur(inner, buckets, depth + 1),
+                    "failed to flatten pointer-to- {inner:#?}"
+                )?;
+                if let Some(inner_flatten) = inner_flatten {
                     return Ok(Some(TyTree::Ptr(Box::new(inner_flatten))));
                 }
             }
             TyTree::Array(inner, len) => {
-                if let Some(inner_flatten) = get_flattened_tree_recur(inner, buckets, depth + 1)? {
-                    return Ok(Some(TyTree::Array(Box::new(inner_flatten), *len)));
+                let len = *len;
+                let inner_flatten = cu::check!(
+                    get_flattened_tree_recur(inner, buckets, depth + 1),
+                    "failed to flatten array-of- {inner:#?}"
+                )?;
+                if let Some(inner_flatten) = inner_flatten {
+                    // single element optimization
+                    if len == 1 {
+                        return Ok(Some(inner_flatten));
+                    }
+                    return Ok(Some(TyTree::Array(Box::new(inner_flatten), len)));
+                }
+                // single element optimization
+                if len == 1 {
+                    return Ok(Some(inner.as_ref().clone()));
                 }
             }
             TyTree::Sub(inners) => {
                 let mut new_vec = Vec::with_capacity(inners.len());
                 for (i, inner) in inners.iter().enumerate() {
-                    if let Some(inner_flatten) = get_flattened_tree_recur(inner, buckets, depth + 1)? {
+                    let inner_flatten = cu::check!(
+                        get_flattened_tree_recur(inner, buckets, depth + 1),
+                        "failed to flatten subroutine part {i}: {inner:#?}"
+                    )?;
+                    if let Some(inner_flatten) = inner_flatten {
                         if new_vec.is_empty() {
                             for old in inners.iter().take(i) {
                                 new_vec.push(old.clone());
@@ -60,14 +81,22 @@ fn optimize_flatten_trees(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
                 }
             }
             TyTree::Ptmd(this_, inner) => {
-                if let Some(inner_flatten) = get_flattened_tree_recur(inner, buckets, depth + 1)? {
+                    let inner_flatten = cu::check!(
+                        get_flattened_tree_recur(inner, buckets, depth + 1),
+                        "failed to flatten ptmd: {inner:#?}"
+                    )?;
+                if let Some(inner_flatten) = inner_flatten {
                     return Ok(Some(TyTree::Ptmd(this_.clone(), Box::new(inner_flatten))));
                 }
             }
             TyTree::Ptmf(this_, inners) => {
                 let mut new_vec = Vec::with_capacity(inners.len());
                 for (i, inner) in inners.iter().enumerate() {
-                    if let Some(inner_flatten) = get_flattened_tree_recur(inner, buckets, depth + 1)? {
+                    let inner_flatten = cu::check!(
+                        get_flattened_tree_recur(inner, buckets, depth + 1),
+                        "failed to flatten ptmf part {i}: {inner:#?}"
+                    )?;
+                    if let Some(inner_flatten) = inner_flatten {
                         if new_vec.is_empty() {
                             for old in inners.iter().take(i) {
                                 new_vec.push(old.clone());
@@ -117,7 +146,7 @@ fn optimize_flatten_trees(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
 }
 
 #[distributed_slice(OPTIMIZERS)]
-fn optimize_equivalent_trees(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
+fn optimize_equivalent_trees(compiler: &mut TypeCompilerUnit) -> cu::Result<bool> {
     let mut changed = false;
 
     let mut prims = BTreeSet::new();
@@ -185,6 +214,12 @@ fn optimize_equivalent_trees(compiler: &mut TypeUnitCompiler) -> cu::Result<bool
         enums.len(),
         unions.len()
     );
+    cu::debug!(
+        "struct_decls: {}, enum_decls: {}, unions_decl: {}",
+        struct_decls.len(),
+        enum_decls.len(),
+        union_decls.len()
+    );
 
     compare_and_merge!(prims);
     compare_and_merge!(enums);
@@ -197,9 +232,12 @@ fn optimize_equivalent_trees(compiler: &mut TypeUnitCompiler) -> cu::Result<bool
     compare_and_merge!(tree_ptmfs);
 
     macro_rules! compare_and_merge_decl {
-        ($set:ident) => {
+        ($set:ident, $type_set:ident) => {
             for j in &$set {
                 let Some(j_names) = compiler.compiled.get(*j).map(|x| &x.value.declared_names) else {
+                    continue;
+                };
+                let Some(j_names2) = compiler.compiled.get(*j).map(|x| &x.value.typedef_names) else {
                     continue;
                 };
                 for k in &$set {
@@ -209,25 +247,73 @@ fn optimize_equivalent_trees(compiler: &mut TypeUnitCompiler) -> cu::Result<bool
                     let Some(k_names) = compiler.compiled.get(*k).map(|x| &x.value.declared_names) else {
                         continue;
                     };
+                    let Some(k_names2) = compiler.compiled.get(*k).map(|x| &x.value.typedef_names) else {
+                        continue;
+                    };
                     if j_names.intersection(k_names).next().is_some() {
                         compiler.merges.push((*k, *j));
                         changed = true;
+                        continue;
+                    }
+                    if j_names.intersection(k_names2).next().is_some() {
+                        compiler.merges.push((*k, *j));
+                        changed = true;
+                        continue;
+                    }
+                    if j_names2.intersection(k_names).next().is_some() {
+                        compiler.merges.push((*k, *j));
+                        changed = true;
+                        continue;
+                    }
+                    if j_names2.intersection(k_names2).next().is_some() {
+                        compiler.merges.push((*k, *j));
+                        changed = true;
+                        continue;
+                    }
+                }
+                for k in &$type_set {
+                    let Some(k_names) = compiler.compiled.get(*k).map(|x| &x.value.declared_names) else {
+                        continue;
+                    };
+                    let Some(k_names2) = compiler.compiled.get(*k).map(|x| &x.value.typedef_names) else {
+                        continue;
+                    };
+                    if j_names.intersection(k_names).next().is_some() {
+                        compiler.merges.push((*j, *k));
+                        changed = true;
+                        continue;
+                    }
+                    if j_names.intersection(k_names2).next().is_some() {
+                        compiler.merges.push((*j, *k));
+                        changed = true;
+                        continue;
+                    }
+                    if j_names2.intersection(k_names).next().is_some() {
+                        compiler.merges.push((*j, *k));
+                        changed = true;
+                        continue;
+                    }
+                    if j_names2.intersection(k_names2).next().is_some() {
+                        compiler.merges.push((*j, *k));
+                        changed = true;
+                        continue;
                     }
                 }
             }
         };
     }
 
-    compare_and_merge_decl!(enum_decls);
-    compare_and_merge_decl!(union_decls);
-    compare_and_merge_decl!(struct_decls);
+    compare_and_merge_decl!(enum_decls, enums);
+    compare_and_merge_decl!(union_decls, unions);
+    compare_and_merge_decl!(struct_decls, structs);
+
 
     Ok(changed)
 }
 
 /// Flatten the union if it only has one member, and is non-recursive
 #[distributed_slice(OPTIMIZERS)]
-fn optimize_single_member_union(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
+fn optimize_single_member_union(compiler: &mut TypeCompilerUnit) -> cu::Result<bool> {
     let mut changed = false;
     for bucket in compiler.compiled.buckets() {
         let unit = &bucket.value;
@@ -254,7 +340,7 @@ fn optimize_single_member_union(compiler: &mut TypeUnitCompiler) -> cu::Result<b
 
 /// If a union has 2 members of the same size, pick one
 #[distributed_slice(OPTIMIZERS)]
-fn optimize_two_members_union(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
+fn optimize_two_members_union(compiler: &mut TypeCompilerUnit) -> cu::Result<bool> {
     let mut changed = false;
     let mut to_check = vec![];
     for bucket in compiler.compiled.buckets() {
@@ -337,7 +423,7 @@ fn optimize_two_members_union(compiler: &mut TypeUnitCompiler) -> cu::Result<boo
 
 /// Flatten the struct if it only has one member, and is non-recursive and non-virtual
 #[distributed_slice(OPTIMIZERS)]
-fn optimize_single_member_struct(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
+fn optimize_single_member_struct(compiler: &mut TypeCompilerUnit) -> cu::Result<bool> {
     let mut changed = false;
     for bucket in compiler.compiled.buckets() {
         let unit = &bucket.value;
@@ -368,7 +454,7 @@ fn optimize_single_member_struct(compiler: &mut TypeUnitCompiler) -> cu::Result<
 /// Inline the base struct members, if the derived class only has one field
 /// that is the base class
 #[distributed_slice(OPTIMIZERS)]
-fn optimize_single_base_member_struct(compiler: &mut TypeUnitCompiler) -> cu::Result<bool> {
+fn optimize_single_base_member_struct(compiler: &mut TypeCompilerUnit) -> cu::Result<bool> {
     let mut changed = false;
     for bucket in compiler.compiled.buckets() {
         let unit = &bucket.value;

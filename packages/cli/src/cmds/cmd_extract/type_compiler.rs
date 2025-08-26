@@ -11,11 +11,15 @@ use super::pre::*;
 use super::type_loader::{SpecialMember, TypePiece, TypePieceStruct, TypePieceUnion, TypePieceVtable};
 use super::{BucketMap, BucketValue};
 
-pub fn compile_types(types: GoffMap<TypePiece>, config: Arc<CfgExtract>) -> cu::Result<BucketMap<Goff, TypeUnit>> {
-    TypeUnitCompiler::try_new(types, config)?.compile()
+pub fn compile_types(name: String, types: GoffMap<TypePiece>, config: Arc<CfgExtract>) -> cu::Result<TypeCompilerUnit> {
+    let mut compiler = TypeCompilerUnit::try_new(name, types, config)?;
+    let result = compiler.compile();
+    cu::check!(result, "failed to compile types for {}", compiler.name)?;
+    Ok(compiler)
 }
 
-pub struct TypeUnitCompiler {
+pub struct TypeCompilerUnit {
+    pub name: String,
     pub config: Arc<CfgExtract>,
     pub pointer_type: Prim,
     pub types: GoffMap<TypePiece>,
@@ -24,8 +28,8 @@ pub struct TypeUnitCompiler {
     pub merges: Vec<(Goff, Goff)>, // from, to
     pub changes: GoffMap<TypeUnitData>,
 }
-impl TypeUnitCompiler {
-    fn try_new(mut types: GoffMap<TypePiece>, config: Arc<CfgExtract>) -> cu::Result<Self> {
+impl TypeCompilerUnit {
+    fn try_new(name: String, mut types: GoffMap<TypePiece>, config: Arc<CfgExtract>) -> cu::Result<Self> {
         // replace TyTree::Base with typedef
         {
             let mut replacement = Vec::with_capacity(types.len());
@@ -44,6 +48,7 @@ impl TypeUnitCompiler {
         }
 
         let self_ = Self {
+            name,
             pointer_type: config.pointer_type()?,
             config,
             types,
@@ -55,7 +60,7 @@ impl TypeUnitCompiler {
 
         Ok(self_)
     }
-    fn compile(mut self) -> cu::Result<BucketMap<Goff, TypeUnit>> {
+    fn compile(&mut self) -> cu::Result<()> {
         // insert primitive types
         for p in Prim::iter() {
             let key = Goff::prim(p);
@@ -69,6 +74,12 @@ impl TypeUnitCompiler {
         }
         self.apply_merges()?;
         cu::debug!("pass 1 compiled type count: {}", self.compiled.buckets().count());
+
+        self.optimize()
+    }
+    pub fn optimize(&mut self) -> cu::Result<()> {
+        self.canonicalize();
+
         // optimize
         let mut changed = true;
         let mut pass = 1;
@@ -79,10 +90,11 @@ impl TypeUnitCompiler {
                 self.changes.clear();
                 let mut current_changed = true;
                 while current_changed {
-                    current_changed = optimize_fn(&mut self)?;
+                    current_changed = optimize_fn(self)?;
                     if current_changed && (!self.changes.is_empty() || !self.merges.is_empty()) {
                         self.apply_changes()?;
                         self.apply_merges()?;
+                        self.canonicalize();
                         changed = true;
                     }
                 }
@@ -115,8 +127,8 @@ impl TypeUnitCompiler {
                 "size mismatch after optimization for {key}"
             );
         }
-        cu::trace!("final: {:#?}", self.compiled);
-        todo!()
+        // cu::trace!("final: {:#?}", self.compiled);
+        Ok(())
     }
 
     fn compile_piece_to_unit(&mut self, goff: Goff) -> cu::Result<()> {
@@ -235,6 +247,14 @@ impl TypeUnitCompiler {
         Ok(())
     }
 
+    fn canonicalize(&mut self) {
+        for bucket in self.compiled.buckets() {
+            if let Some(data) = &bucket.value.data {
+                data.canonicalize(&self.compiled);
+            }
+        }
+    }
+
     fn apply_merges(&mut self) -> cu::Result<()> {
         if self.merges.is_empty() {
             return Ok(());
@@ -243,11 +263,6 @@ impl TypeUnitCompiler {
             cu::check!(self.compiled.merge(from, to), "failed to merge type {from} into {to}")?;
         }
         self.merges.clear();
-        for bucket in self.compiled.buckets() {
-            if let Some(data) = &bucket.value.data {
-                data.canonicalize(&self.compiled);
-            }
-        }
         Ok(())
     }
 
@@ -432,12 +447,9 @@ impl TypeUnitCompiler {
             _ => return Ok(None),
         };
 
-        // find the first base member
-        let vtable = match struct_data.members.iter().find(|x| x.is_base()) {
+        // find the base member at offset 0 to inherit the vtable from
+        let vtable = match struct_data.members.iter().find(|x| x.is_base() && x.offset == 0) {
             Some(base_member) => {
-                if base_member.offset != 0 {
-                    cu::bail!("unexpected non-zero offset first base member for struct at {goff}");
-                }
                 // resolve the base vtable
                 let base_vtable = cu::check!(
                     self.compile_vtable_recur(base_member.ty, seen),
@@ -852,9 +864,9 @@ impl TypeUnitStructVtableTemp {
         // that are equivalent, except for the name of the dtor
         // (which depends on the type name)
         let mut d0 = vdtor.clone();
-        d0.name = Arc::from("~dtorD0");
+        d0.name = Arc::from(format!("{}D0", vdtor.name).as_str());
         self.ensure(i + 1).replace(d0);
-        vdtor.name = Arc::from("~dtorD1");
+        vdtor.name = Arc::from(format!("{}D1", vdtor.name).as_str());
         self.ensure(i).replace(vdtor);
     }
 }
