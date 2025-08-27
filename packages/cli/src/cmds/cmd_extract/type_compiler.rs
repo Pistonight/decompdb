@@ -1,5 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::{cell::Cell, collections::BTreeSet};
 
 use cu::pre::*;
 use fxhash::FxHashSet;
@@ -73,35 +73,76 @@ impl TypeCompilerUnit {
             self.compile_piece_to_unit(k)?;
         }
         self.apply_merges()?;
-        cu::debug!("pass 1 compiled type count: {}", self.compiled.buckets().count());
 
-        self.optimize()
+        self.optimize(false)
     }
-    pub fn optimize(&mut self) -> cu::Result<()> {
-        self.canonicalize();
+    pub fn categorized_type_keys(&self) -> Categorized<BTreeSet<Goff>>{
+        let mut out = Categorized::<BTreeSet<Goff>>::default();
+        for bucket in self.compiled.buckets() {
+            let unit = &bucket.value;
+            let Some(data) = &unit.data else {
+                continue;
+            };
+            let bucket_key = bucket.canonical_key();
+            match data {
+                TypeUnitData::Prim(_) => out.prims.insert(bucket_key),
+                TypeUnitData::Enum(_) => out.enums.insert(bucket_key),
+                TypeUnitData::EnumDecl => out.enum_decls.insert(bucket_key),
+                TypeUnitData::Union(_) => out.unions.insert(bucket_key),
+                TypeUnitData::UnionDecl => out.union_decls.insert(bucket_key),
+                TypeUnitData::Struct(_) => out.structs.insert(bucket_key),
+                TypeUnitData::StructDecl => out.struct_decls.insert(bucket_key),
+                TypeUnitData::Tree(tree) => match tree {
+                    TyTree::Base(_) => false,
+                    TyTree::Array(_, _) => out.tree_arrays.insert(bucket_key),
+                    TyTree::Ptr(_) => out.tree_ptrs.insert(bucket_key),
+                    TyTree::Sub(_) => out.tree_subs.insert(bucket_key),
+                    TyTree::Ptmd(_, _) => out.tree_ptmds.insert(bucket_key),
+                    TyTree::Ptmf(_, _) => out.tree_ptmfs.insert(bucket_key),
+                },
+            };
+        }
+        out
+    }
+    pub fn type_stats(&self) -> Categorized<usize>{
+        let mut out = Categorized::<usize>::default();
+        for bucket in self.compiled.buckets() {
+            let unit = &bucket.value;
+            let Some(data) = &unit.data else {
+                continue;
+            };
+            match data {
+                TypeUnitData::Prim(_) => out.prims+=1,
+                TypeUnitData::Enum(_) => out.enums+=1,
+                TypeUnitData::EnumDecl => out.enum_decls+=1,
+                TypeUnitData::Union(_) => out.unions+=1,
+                TypeUnitData::UnionDecl => out.union_decls+=1,
+                TypeUnitData::Struct(_) => out.structs+=1,
+                TypeUnitData::StructDecl => out.struct_decls+=1,
+                TypeUnitData::Tree(tree) => match tree {
+                    TyTree::Base(_) => {},
+                    TyTree::Array(_, _) => out.tree_arrays+=1,
+                    TyTree::Ptr(_) => out.tree_ptrs+=1,
+                    TyTree::Sub(_) => out.tree_subs+=1,
+                    TyTree::Ptmd(_, _) => out.tree_ptmds+=1,
+                    TyTree::Ptmf(_, _) => out.tree_ptmfs+=1,
+                },
+            };
+        }
+        out
+    }
+    pub fn optimize(&mut self, is_linking: bool) -> cu::Result<()> {
+        cu::check!(self.canonicalize(), "failed to canonicalize types before optimization")?;
+        cu::debug!("start optimizing, type count: {}", self.compiled.buckets().count());
 
         // optimize
         let mut changed = true;
         let mut pass = 1;
         while changed {
-            changed = false;
-            for optimize_fn in super::type_optimizer::OPTIMIZERS {
-                self.merges.clear();
-                self.changes.clear();
-                let mut current_changed = true;
-                while current_changed {
-                    current_changed = optimize_fn(self)?;
-                    if current_changed && (!self.changes.is_empty() || !self.merges.is_empty()) {
-                        self.apply_changes()?;
-                        self.apply_merges()?;
-                        self.canonicalize();
-                        changed = true;
-                    }
-                }
-            }
-
+            changed = self.optimize_once(is_linking)?;
             pass += 1;
             cu::debug!("pass {pass} compiled type count: {}", self.compiled.buckets().count());
+            cu::check!(self.compiled.check(), "bucket map is invalid after pass {pass}")?;
         }
 
         // ensure we did not mess up during optimization
@@ -129,6 +170,25 @@ impl TypeCompilerUnit {
         }
         // cu::trace!("final: {:#?}", self.compiled);
         Ok(())
+    }
+    pub fn optimize_once(&mut self, is_linking: bool) -> cu::Result<bool> {
+        let mut changed = false;
+        for optimize_fn in super::type_optimizer::OPTIMIZERS {
+            self.merges.clear();
+            self.changes.clear();
+            let mut current_changed = true;
+            while current_changed {
+                current_changed = optimize_fn(self, is_linking)?;
+                if current_changed && (!self.changes.is_empty() || !self.merges.is_empty()) {
+                    self.apply_changes()?;
+                    self.apply_merges()?;
+                    cu::check!(self.canonicalize(), "failed to canonicalize types after applying optimization")?;
+                    changed = true;
+                }
+            }
+        }
+
+        Ok(changed)
     }
 
     fn compile_piece_to_unit(&mut self, goff: Goff) -> cu::Result<()> {
@@ -236,7 +296,7 @@ impl TypeCompilerUnit {
             }
             TypePiece::Composite(ty_tree) => {
                 unit.data = Some(TypeUnitData::Tree(
-                    ty_tree.clone().map(|x| Cell::new(x.unwrap_or(Goff::prim(Prim::Void)))),
+                    ty_tree.clone().map(|x| x.unwrap_or(Goff::prim(Prim::Void))),
                 ));
             }
         };
@@ -247,12 +307,25 @@ impl TypeCompilerUnit {
         Ok(())
     }
 
-    fn canonicalize(&mut self) {
-        for bucket in self.compiled.buckets() {
-            if let Some(data) = &bucket.value.data {
-                data.canonicalize(&self.compiled);
+    pub fn canonicalize(&mut self) -> cu::Result<()> {
+        // clone the key map to workaround the borrowing constrained
+        // (honestly, might be more efficient this way)
+        let canonical = self.compiled.canonical_key_map();
+        for unit in self.compiled.buckets_mut() {
+            if let Some(data) = &mut unit.data {
+                data.canonicalize(&canonical);
             }
         }
+        let mut unlinked_goffs = BTreeSet::new();
+        for bucket in self.compiled.buckets() {
+            if let Some(data) = &bucket.value.data {
+                data.check_unlinked(&self.compiled, &mut unlinked_goffs);
+            }
+        }
+        if !unlinked_goffs.is_empty() {
+            cu::bail!("found {} unlinked types", unlinked_goffs.len())
+        }
+        Ok(())
     }
 
     fn apply_merges(&mut self) -> cu::Result<()> {
@@ -263,6 +336,12 @@ impl TypeCompilerUnit {
             cu::check!(self.compiled.merge(from, to), "failed to merge type {from} into {to}")?;
         }
         self.merges.clear();
+        Ok(())
+    }
+    pub fn apply_merges_from<I: IntoIterator<Item=(Goff, Goff)>>(&mut self, merges: I) -> cu::Result<()> {
+        for (from, to) in merges {
+            cu::check!(self.compiled.merge(from, to), "failed to merge type {from} into {to}")?;
+        }
         Ok(())
     }
 
@@ -511,13 +590,29 @@ impl TypeCompilerUnit {
 
         let c = match data {
             TypeUnitData::Tree(tree) => {
-                tree.complexity(|x| self.resolve_complexity(x.get()).expect("recur complexity failed"))
+                tree.complexity(|x| self.resolve_complexity(*x).expect("recur complexity failed"))
             }
             _ => 1,
         };
 
         Ok(c)
     }
+}
+
+#[derive(Default, Debug)]
+pub struct Categorized<T> {
+    pub prims: T,
+    pub enums: T,
+    pub enum_decls: T,
+    pub unions: T,
+    pub union_decls: T,
+    pub structs: T,
+    pub struct_decls: T,
+    pub tree_arrays: T,
+    pub tree_ptrs: T,
+    pub tree_subs: T,
+    pub tree_ptmds: T,
+    pub tree_ptmfs: T,
 }
 
 #[derive(Debug, Default)]
@@ -538,17 +633,198 @@ impl BucketValue for TypeUnit {
             None => self.data = other.data,
         }
         self.declared_names.extend(other.declared_names);
-        for name in other.typedef_names {
-            if !self.declared_names.contains(&name) {
-                self.typedef_names.insert(name);
-            }
-        }
+        self.typedef_names.extend(other.typedef_names);
+        // for name in other.typedef_names {
+        //     if !self.declared_names.contains(&name) {
+        //     }
+        // }
 
         Ok(())
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+impl TypeUnit {
+    pub fn zip(&self, other: &Self, map: &BucketMap<Goff, TypeUnit>, merges: &mut BTreeSet<(Goff, Goff)>) -> cu::Result<bool> {
+        if self.declared_names.intersection(&other.declared_names).next().is_none() {
+            return Ok(false);
+        }
+        macro_rules! format_print_link_name {
+            () => {{
+                let v = self.declared_names.intersection(&other.declared_names).collect::<Vec<_>>();
+                format!("linking is based on: {v:#?}, all names are {:#?} and {:#?}", self.declared_names, other.declared_names)
+            }}
+        }
+        if let (Some(a), Some(b)) = (&self.data, &other.data) {
+            match (a,b) {
+                (TypeUnitData::Prim(a), TypeUnitData::Prim(b)) => {
+                    cu::ensure!(a == b, "link error: primitives have overlapping names, but data are different.");
+                }
+                (TypeUnitData::Enum(a), TypeUnitData::Enum(b)) => {
+                    cu::ensure!(a==b,"link error: enums have overlapping names, but data are different.");
+                }
+                (TypeUnitData::Union(a), TypeUnitData::Union(b)) => {
+                    if a.byte_size != b.byte_size {
+                        return Ok(false);
+                    }
+                    if a.members.len() != b.members.len() {
+                        return Ok(false);
+                    }
+                    // sanity check
+                    // cu::ensure!(a.byte_size == b.byte_size, "link error: unions being zipped have different byte sizes.");
+                    // cu::ensure!(a.members.len() == b.members.len(), "link error: unions being zipped have different member sizes.");
+                    for (member_a, member_b) in std::iter::zip(&a.members, &b.members) {
+                        let (name_a, _) = member_a;
+                        let (name_b, _) = member_b;
+                        if name_a != name_b {
+                            return Ok(false);
+                        }
+                        // cu::ensure!(name_a == name_b, "link error: unions being linked don't have the same member name.");
+                    }
+                    for (member_a, member_b) in std::iter::zip(&a.members, &b.members) {
+                        let (_, ty_a) = member_a;
+                        let (_, ty_b) = member_b;
+                        // cu::ensure!(name_a == name_b, "link error: unions being linked don't have the same member name.");
+                        cu::check!(do_zip(*ty_a, *ty_b, map, merges), "failed to zip union members")?;
+                    }
+                    return Ok(true);
+                }
+                (TypeUnitData::Struct(a), TypeUnitData::Struct(b)) => {
+                    if a.byte_size != b.byte_size {
+                        return Ok(false);
+                    }
+                    if a.vtable.entries.len() != b.vtable.entries.len() {
+                        return Ok(false);
+                    }
+                    if a.members.len() != b.members.len() {
+                        return Ok(false);
+                    }
+                    // cu::ensure!(a.byte_size == b.byte_size, "link error: structs being zipped have different byte sizes: {} and {}; {}", a.byte_size, b.byte_size, format_print_link_name!());
+                    // cu::ensure!(a.vtable.entries.len() == b.vtable.entries.len(), "link error: structs being zipped have different vtable sizes.");
+                    // cu::ensure!(a.members.len() == b.members.len(), "link error: structs being zipped have different member sizes");
+                    for (ventry_a, ventry_b) in std::iter::zip(&a.vtable.entries, &b.vtable.entries) {
+                        if ventry_a.name != ventry_b.name {
+                            // ignore dtor differences for now
+                            if ventry_a.name.starts_with('~') != ventry_b.name.starts_with('~') {
+                                cu::bail!("link error: structs vtable entries being zipped have different names: {} and {}; {}", ventry_a.name, ventry_b.name, format_print_link_name!());
+                            }
+                        }
+                        // this might be different, i don't know why
+                        // cu::ensure!(ventry_a.is_from_base == ventry_b.is_from_base, "link error: structs vtable entries being zipped have different is_from_base");
+                        if ventry_a.function_types.len() != ventry_b.function_types.len() {
+                            return Ok(false);
+                        }
+                        // cu::ensure!(ventry_a.function_types.len() == ventry_b.function_types.len(), "link error: structs vtable entries being zipped have different function types");
+                    }
+                    for (a, b) in std::iter::zip(&a.members, &b.members) {
+                        if a.offset != b.offset {
+                            return Ok(false);
+                        }
+                        if a.name != b.name {
+                            return Ok(false);
+                        }
+                        if a.special != b.special {
+                            return Ok(false);
+                        }
+                        // cu::ensure!(a.offset == b.offset, "link error: structs being zipped don't have the same member offset.");
+                        // cu::ensure!(a.name == b.name, "link error: structs being zipped don't have the same name.");
+                        // cu::ensure!(a.special == b.special, "link error: structs being zipped don't have the same special type.");
+                    }
+                    // for (ventry_a, ventry_b) in std::iter::zip(&a.vtable.entries, &b.vtable.entries) {
+                    //     for (func_a, func_b) in std::iter::zip(&ventry_a.function_types, &ventry_b.function_types) {
+                    //         cu::check!(zip_trees(func_a, func_b, map, merges), "failed to zip function types for vtable")?
+                    //     }
+                    // }
+                    for (a, b) in std::iter::zip(&a.members, &b.members) {
+                        cu::check!(do_zip(a.ty, b.ty, map, merges), "failed to zip struct members")?;
+                    }
+                    return Ok(true);
+                }
+                // (TypeUnitData::Tree(a), TypeUnitData::Tree(b)) => {
+                //     zip_trees(a, b, map, merges)?;
+                // }
+                _ => {}
+            }
+        }
+        Ok(false)
+    }
+    pub fn names_overlap(&self, other: &Self) -> bool {
+            let jn1 = &self.typedef_names;
+            let jn2 = &self.declared_names;
+            let kn1 = &other.typedef_names;
+            let kn2 = &other.declared_names;
+            if jn1.intersection(kn1).next().is_some() {
+                return true;
+            }
+            if jn1.intersection(kn2).next().is_some() {
+                return true;
+            }
+            if jn2.intersection(kn1).next().is_some() {
+                return true;
+            }
+            if jn2.intersection(kn2).next().is_some() {
+                return true;
+            }
+        false
+
+    }
+}
+
+fn zip_trees(a: &TyTree<Goff>, b: &TyTree<Goff>, map: &BucketMap<Goff, TypeUnit>, merges: &mut BTreeSet<(Goff, Goff)>) -> cu::Result<()> {
+    match (a, b) {
+        (TyTree::Base(a), TyTree::Base(b)) => {
+            do_zip(*a, *b, map, merges)?;
+            return Ok(());
+        }
+        (TyTree::Array(a, len_a), TyTree::Array(b, len_b)) => {
+            if len_a != len_b {
+                return Ok(());
+            }
+            // cu::ensure!(len_a == len_b, "arrays being zipped don't have the same length");
+            cu::check!(zip_trees(a, b, map, merges), "failed to zip array element type")?;
+            return Ok(())
+        },
+        (TyTree::Ptr(a), TyTree::Ptr(b)) => {
+            cu::check!(zip_trees(a, b, map, merges), "failed to zip pointee type")?;
+            return Ok(())
+        }
+        (TyTree::Sub(a), TyTree::Sub(b)) => {
+            if a.len() != b.len() {
+                return Ok(())
+            }
+            // cu::ensure!(a.len() == b.len(), "subroutines being zipped don't have the same type length");
+            for (ty_a, ty_b) in std::iter::zip(a, b) {
+                cu::check!(zip_trees(ty_a, ty_b, map, merges), "failed to zip subroutine parts")?;
+            }
+            return Ok(())
+        }
+        (TyTree::Ptmd(this_a, a), TyTree::Ptmd(this_b, b)) => {
+            cu::check!(do_zip(*this_a, *this_b, map, merges), "failed to zip ptmd this type")?;
+            cu::check!(zip_trees(a, b, map, merges), "failed to zip ptmd pointee type")?;
+            return Ok(())
+        }
+        (TyTree::Ptmf(this_a, a), TyTree::Ptmf(this_b, b)) => {
+            cu::check!(do_zip(*this_a, *this_b, map, merges), "failed to zip ptmf this type")?;
+            cu::ensure!(a.len() == b.len(), "ptmf being zipped don't have the same type length");
+            for (ty_a, ty_b) in std::iter::zip(a, b) {
+                cu::check!(zip_trees(ty_a, ty_b, map, merges), "failed to zip ptmf subroutine parts")?;
+            }
+            return Ok(())
+        }
+        // trees could have different shape in different units, which is OK
+        _ => return Ok(())
+    }
+}
+
+fn do_zip(a: Goff, b: Goff, map: &BucketMap<Goff, TypeUnit>, merges: &mut BTreeSet<(Goff, Goff)>) -> cu::Result<()> {
+    if merges.insert((a,b)) {
+        // let a_unit = &map.get_unwrap(a)?.value;
+        // let b_unit = &map.get_unwrap(b)?.value;
+        // cu::check!(a_unit.zip(b_unit, map, merges), "failed to zip types {a} and {b}")?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeUnitData {
     Prim(Prim),
     Enum(TypeUnitEnum),
@@ -557,7 +833,7 @@ pub enum TypeUnitData {
     UnionDecl,
     Struct(TypeUnitStruct),
     StructDecl,
-    Tree(TyTree<Cell<Goff>>),
+    Tree(TyTree<Goff>),
 }
 
 impl TypeUnitData {
@@ -588,24 +864,69 @@ impl TypeUnitData {
         }
     }
 
-    fn canonicalize(&self, types: &BucketMap<Goff, TypeUnit>) {
+    fn canonicalize(&mut self, canonical: &BTreeMap<Goff, Goff>) {
         match self {
             TypeUnitData::Prim(_) | TypeUnitData::EnumDecl | TypeUnitData::UnionDecl | TypeUnitData::StructDecl => {}
-            TypeUnitData::Tree(tree) => tree.for_each(|goff| goff.set(types.canonical_key(goff.get()))),
+            TypeUnitData::Tree(tree) => tree.for_each_mut(|goff| *goff = *canonical.get(goff).unwrap()),
+            TypeUnitData::Enum(_) => {}
+            TypeUnitData::Union(data) => {
+                for (_, member_type) in &mut data.members {
+                    *member_type = *canonical.get(member_type).unwrap();
+                }
+            }
+            TypeUnitData::Struct(data) => {
+                for ventry in &mut data.vtable.entries {
+                    for function_type in &mut ventry.function_types {
+                        function_type.for_each_mut(|x| *x = *canonical.get(x).unwrap());
+                    }
+                }
+                for member in &mut data.members {
+                    member.ty = *canonical.get(&member.ty).unwrap();
+                }
+            }
+        }
+    }
+
+    fn check_unlinked(&self, types: &BucketMap<Goff, TypeUnit>, out: &mut BTreeSet<Goff>) {
+        match self {
+            TypeUnitData::Prim(_) | TypeUnitData::EnumDecl | TypeUnitData::UnionDecl | TypeUnitData::StructDecl => {}
+            TypeUnitData::Tree(tree) => {
+                tree.for_each(|goff| {
+                    let goff = *goff;
+                    if types.get(goff).is_none() {
+                        cu::error!("found unlinked key {goff} in tree");
+                        out.insert(goff);
+                    }
+                });
+            }
             TypeUnitData::Enum(_) => {}
             TypeUnitData::Union(data) => {
                 for (_, member_type) in &data.members {
-                    member_type.set(types.canonical_key(member_type.get()));
+                    let goff = *member_type;
+                    if types.get(goff).is_none() {
+                        cu::error!("found unlinked key {goff} in union");
+                        out.insert(goff);
+                    }
                 }
             }
             TypeUnitData::Struct(data) => {
                 for ventry in &data.vtable.entries {
                     for function_type in &ventry.function_types {
-                        function_type.for_each(|x| x.set(types.canonical_key(x.get())));
+                        function_type.for_each(|goff| {
+                            let goff = *goff;
+                            if types.get(goff).is_none() {
+                                cu::error!("found unlinked key {goff} in struct vtable");
+                                out.insert(goff);
+                            }
+                        });
                     }
                 }
                 for member in &data.members {
-                    member.ty.set(types.canonical_key(member.ty.get()));
+                    let goff = member.ty;
+                    if types.get(goff).is_none() {
+                        cu::error!("found unlinked key {goff} in struct member");
+                        out.insert(goff);
+                    }
                 }
             }
         }
@@ -624,7 +945,7 @@ impl TypeUnitData {
             TypeUnitData::Tree(tree) => {
                 let mut found = false;
                 tree.for_each(|x| {
-                    if x.get() == goff {
+                    if *x == goff {
                         found = true
                     }
                 });
@@ -634,36 +955,30 @@ impl TypeUnitData {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeUnitEnum {
     /// Byte size of the enum
     pub byte_size: u32,
     /// Enumerators of the enum, in the order they appear in DWARF
     pub enumerators: Vec<(Arc<str>, i64)>,
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeUnitUnion {
     /// Byte size of the union
     pub byte_size: u32,
     /// Enumerators of the enum, in the order they appear in DWARF
-    pub members: Vec<(Option<Arc<str>>, Cell<Goff>)>,
+    pub members: Vec<(Option<Arc<str>>, Goff)>,
 }
 impl TypeUnitUnion {
     pub fn new(data: &TypePieceUnion) -> Self {
         let byte_size = data.byte_size;
         let members = data
             .members
-            .iter()
-            .map(|member| {
-                let name = member.0.clone();
-                let ty = Cell::new(member.1);
-                (name, ty)
-            })
-            .collect();
+        .clone();
         Self { byte_size, members }
     }
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeUnitStruct {
     /// Byte size of the struct
     pub byte_size: u32,
@@ -681,7 +996,7 @@ impl TypeUnitStruct {
             .map(|member| TypeUnitStructMember {
                 offset: member.offset,
                 name: member.name.clone(),
-                ty: Cell::new(member.ty),
+                ty: member.ty,
                 special: member.special.clone(),
             })
             .collect();
@@ -693,14 +1008,14 @@ impl TypeUnitStruct {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeUnitStructMember {
     /// Offset of the member within the struct
     pub offset: usize,
     /// Name of the member. Could be None for anonymous union as member
     pub name: Option<Arc<str>>,
     /// Type of the member
-    pub ty: Cell<Goff>,
+    pub ty: Goff,
     /// Special-case member
     pub special: Option<SpecialMember>,
 }
@@ -711,9 +1026,19 @@ impl TypeUnitStructMember {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq)]
 pub struct TypeUnitStructVtable {
     pub entries: Vec<TypeUnitStructVentry>,
+}
+
+impl std::hash::Hash for TypeUnitStructVtable {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.entries.len().hash(state);
+        for entry in &self.entries {
+            entry.name.hash(state);
+            entry.is_from_base.hash(state);
+        }
+    }
 }
 
 impl PartialEq for TypeUnitStructVtable {
@@ -745,12 +1070,12 @@ pub struct TypeUnitStructVtableTemp {
     virtual_dtor: Option<TypeUnitStructVentry>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeUnitStructVentry {
     /// Name of the virtual function
     name: Arc<str>,
     /// Types to make up the subroutine type
-    function_types: Vec<TyTree<Cell<Goff>>>,
+    function_types: Vec<TyTree<Goff>>,
     /// If the vtable entry is inherited from base class
     is_from_base: bool,
 }
@@ -785,7 +1110,7 @@ impl TypeUnitStructVtableTemp {
             let function_types = piece_entry
                 .function_types
                 .iter()
-                .map(|tree| tree.clone().map(|x| Cell::new(x.unwrap_or(Goff::prim(Prim::Void)))))
+                .map(|tree| tree.clone().map(|x| x.unwrap_or(Goff::prim(Prim::Void))))
                 .collect();
             let new_entry = TypeUnitStructVentry {
                 name,

@@ -37,10 +37,19 @@ impl<K: Copy + PartialEq + Ord + std::fmt::Display, V: BucketValue> BucketMap<K,
         self.buckets.get_mut(index)?.as_mut().map(|x| (index, x))
     }
 
+    pub fn buckets(&self) -> impl Iterator<Item = &Bucket<K, V>> {
+        self.buckets.iter().filter_map(|x| x.as_ref())
+    }
+
+    pub fn buckets_mut(&mut self) -> impl Iterator<Item = &mut V> {
+        self.buckets.iter_mut().filter_map(|x| x.as_mut().map(|x| &mut x.value))
+    }
+
     pub fn add_key(&mut self, key: K, new_key: K) -> cu::Result<()> {
         let (i, bucket) = cu::check!(self.bucket_mut(key), "error in add_key: cannot find bucket with key {key}")?;
         bucket.other_keys.insert(new_key);
         self.key_to_index.insert(new_key, i);
+        cu::check!(self.check(), "error in add_key: bucket map is invalid after adding new key {new_key} to key {key}")?;
         Ok(())
     }
 
@@ -57,8 +66,11 @@ impl<K: Copy + PartialEq + Ord + std::fmt::Display, V: BucketValue> BucketMap<K,
         bucket
     }
 
-    pub fn buckets(&self) -> impl Iterator<Item = &Bucket<K, V>> {
-        self.buckets.iter().filter_map(|x| x.as_ref())
+    pub fn canonical_key_map(&self) -> BTreeMap<K, K> {
+        self.key_to_index.iter().map(|(k, i)| {
+            let ck = self.buckets.get(*i).unwrap().as_ref().unwrap().canonical_key();
+            (*k, ck)
+        }).collect()
     }
 
     pub fn canonical_key(&self, key: K) -> K {
@@ -167,9 +179,69 @@ impl<K: Copy + PartialEq + Ord + std::fmt::Display, V: BucketValue> BucketMap<K,
     pub fn extend(&mut self, other: Self) -> cu::Result<()> {
         for bucket in other.buckets.into_iter().flatten() {
             let i = self.insert_new_internal(bucket.canonical_key(), bucket.value).context("error in extend: the 2 maps have overlapping key sets")?;
-            for key in bucket.other_keys {
-                self.key_to_index.insert(key, i);
+            let new_bucket = self.buckets.get_mut(i).unwrap().as_mut().unwrap();
+            new_bucket.other_keys = bucket.other_keys;
+            for key in &new_bucket.other_keys {
+                self.key_to_index.insert(*key, i);
             }
+        }
+        cu::check!(self.check(), "error in extend: bucket map is invalid after extend")?;
+        Ok(())
+    }
+    #[cfg(not(debug_assertions))]
+    pub fn check(&self) -> cu::Result<()> {
+        Ok(())
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn check(&self) -> cu::Result<()> {
+        let mut keys_in_buckets = BTreeSet::new();
+        for (i, bucket) in self.buckets.iter().enumerate() {
+            match bucket {
+                None => {
+                    for (k, ki) in &self.key_to_index {
+                        if i == *ki {
+                            cu::bail!("bucket map check failed: key {k} references unlinked bucket {i}");
+                        }
+                    }
+                }
+                Some(bucket) => {
+                    let bucket_key = bucket.canonical_key();
+                    if !keys_in_buckets.insert(bucket_key) {
+                        cu::bail!("key {bucket_key} is in multiple buckets");
+                    }
+                    if bucket.other_keys.contains(&bucket_key) {
+                        cu::bail!("bucket map check failed: bucket {i} has its canonical key {bucket_key} inside other_keys");
+                    }
+                    for k in &bucket.other_keys {
+                        if !keys_in_buckets.insert(*k) {
+                            cu::bail!("key {bucket_key} is in multiple buckets");
+                        }
+                        if self.key_to_index.get(k).is_none() {
+                            cu::bail!("bucket map check failed: bucket {i} with key {bucket_key} has key {k}, but the key {k} is unlinked");
+                        }
+                    }
+                    for (k, ki) in &self.key_to_index {
+                        let is_this_bucket = i == *ki;
+                        if bucket_key == *k || bucket.other_keys.contains(k) {
+                            if !is_this_bucket {
+                                cu::bail!("bucket map check failed: bucket {i} with key {bucket_key} has key {k}, but {k} links to bucket {ki}");
+                            }
+                            continue;
+                        }
+                        if is_this_bucket {
+                            cu::bail!("bucket map check failed: key {k} links to bucket {i}, but the key {k} is not in that bucket");
+                        }
+                    }
+                }
+            }
+        }
+        let keys_in_map: BTreeSet<_> = self.key_to_index.keys().copied().collect();
+        for k in keys_in_map.difference(&keys_in_buckets) {
+            cu::bail!("key {k} is tracked in the map but not in any bucket");
+        }
+        for k in keys_in_buckets.difference(&keys_in_map) {
+            cu::bail!("key {k} is tracked in a bucket but not in the map");
         }
         Ok(())
     }

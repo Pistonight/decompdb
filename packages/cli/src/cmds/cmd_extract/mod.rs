@@ -108,12 +108,11 @@ async fn run_internal(config: Config, dwarf: &'static pre::Dwarf<'static>) -> cu
         let mut num_union_decls = 0;
         let mut num_struct_decls = 0;
         let mut count = 0;
-        let mut type_count = 0;
         while let Some(compiler) = set.next().await {
             let (compiler, name) = compiler??;
             count += 1;
             for bucket in compiler.compiled.buckets() {
-                type_count += 1;
+                // type_count += 1;
                 let Some(data) = &bucket.value.data else {
                     continue;
                 };
@@ -128,7 +127,8 @@ async fn run_internal(config: Config, dwarf: &'static pre::Dwarf<'static>) -> cu
                     type_compiler::TypeUnitData::Tree(_) => {}
                 }
             }
-            cu::progress!(&bar, count, "[{num_enums} enums ({num_enum_decls} decl), {num_unions} unions ({num_union_decls} decl), {num_structs} structs ({num_struct_decls} decl)] {name}");
+            // cu::progress!(&bar, count, "[{num_enums} enums ({num_enum_decls} decl), {num_unions} unions ({num_union_decls} decl), {num_structs} structs ({num_struct_decls} decl)] {name}");
+            cu::progress!(&bar, count, "{name}");
             compilers.push(compiler);
         }
 
@@ -145,10 +145,21 @@ async fn run_internal(config: Config, dwarf: &'static pre::Dwarf<'static>) -> cu
         compilers
     };
 
-    let x = type_linker::link_types(compilers).await.context("type linking failed")?;
+    compilers.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let linked_types = type_linker::link_types(compilers).await.context("type linking failed")?;
+
+    let keys = linked_types.categorized_type_keys();
+    let enums = keys.enums.into_iter().map(|k| {
+        (k, &linked_types.compiled.get_unwrap(k).unwrap().value)
+    }).collect::<Vec<_>>();
+    let unions = keys.unions.into_iter().map(|k| {
+        (k, &linked_types.compiled.get_unwrap(k).unwrap().value)
+    }).collect::<Vec<_>>();
 
 
-    cu::info!("todo");
+    cu::info!("ENUMS{enums:#?}");
+    cu::info!("UNIONS{unions:#?}");
 
     // let unit = units.iter().find(|x| x.name.contains("PauseMenuDataMgr")).unwrap();
 

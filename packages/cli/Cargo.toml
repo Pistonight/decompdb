@@ -7,14 +7,16 @@ license = "MIT"
 
 [dependencies]
 cu = { workspace = true, features = ["cli", "process", "toml", "derive", "coroutine-heavy"] }
+tyyaml = { path = "../tyyaml" }
 elf = "0.8.0"
 fxhash = "0.2.1"
 gimli = "0.32.1"
 linkme = "0.3.33"
+rayon = "1.11.0"
 regex = "1.11.1"
 serde = "1"
 spin = "0.10.0"
-tyyaml = { path = "../tyyaml" }
+tokio = "1"
 
 [[bin]]
 name = "decompdb"

@@ -776,7 +776,7 @@ pub struct TypePieceStructMember {
     pub special: Option<SpecialMember>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SpecialMember {
     Base,
     Vfptr,
