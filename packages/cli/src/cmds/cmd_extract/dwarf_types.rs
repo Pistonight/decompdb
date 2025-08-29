@@ -6,14 +6,12 @@ use gimli::constants::*;
 use tyyaml::Prim;
 
 // convienience type aliases
-pub type In<'i> = gimli::EndianSlice<'i, gimli::LittleEndian>;
 // pub type Unit<'i> = gimli::Unit<In<'i>>;
 // pub type UnitHeader<'i> = gimli::UnitHeader<In<'i>>;
 // pub type Tree<'i, 'a, 'u> = gimli::EntriesTree<'a, 'u, In<'i>>;
 // pub type Node<'i, 'a, 'u, 't> = gimli::EntriesTreeNode<'a, 'u, 't, In<'i>>;
 // pub type Dwarf<'i> = gimli::Dwarf<In<'i>>;
 // pub type Die<'i, 'a, 'u> = gimli::DebuggingInformationEntry<'a, 'u, In<'i>, usize>;
-pub type Tag = gimli::DwTag;
 pub type GoffMap<T> = BTreeMap<Goff, T>;
 
 /// Local offset into a Compilation Unit in DWARF
