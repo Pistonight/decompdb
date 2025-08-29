@@ -7,7 +7,7 @@ use fxhash::FxHashMap;
 use fxhash::FxHasher64;
 use rayon::prelude::*;
 use linkme::distributed_slice;
-use tyyaml::TyTree;
+use tyyaml::Tree;
 
 use super::BucketMap;
 use super::pre::*;
@@ -33,16 +33,16 @@ pub static OPTIMIZERS: &[fn(&mut TypeCompilerUnit, bool) -> cu::Result<bool>] = 
 // #[distributed_slice(LATE_OPTIMIZERS)]
 fn optimize_flatten_trees(compiler: &mut TypeCompilerUnit, _: bool) -> cu::Result<bool> {
     fn get_flattened_tree_recur(
-        tree: &TyTree<Goff>,
+        tree: &Tree<Goff>,
         buckets: &BucketMap<Goff, TypeUnit>,
         depth: usize,
-    ) -> cu::Result<Option<TyTree<Goff>>> {
+    ) -> cu::Result<Option<Tree<Goff>>> {
         // return Some if changed
         if depth > 1000 {
             cu::bail!("max flatten depth limit reached");
         }
         match tree {
-            TyTree::Base(inner) => {
+            Tree::Base(inner) => {
                 let inner_key = *inner;
                 let inner_bucket = buckets.get_unwrap(inner_key)?;
                 let inner_unit = &inner_bucket.value;
@@ -50,16 +50,16 @@ fn optimize_flatten_trees(compiler: &mut TypeCompilerUnit, _: bool) -> cu::Resul
                     return Ok(Some(inner_tree.clone()));
                 }
             }
-            TyTree::Ptr(inner) => {
+            Tree::Ptr(inner) => {
                 let inner_flatten = cu::check!(
 get_flattened_tree_recur(inner, buckets, depth + 1),
                     "failed to flatten pointer-to- {inner:#?}"
                 )?;
                 if let Some(inner_flatten) = inner_flatten {
-                    return Ok(Some(TyTree::Ptr(Box::new(inner_flatten))));
+                    return Ok(Some(Tree::Ptr(Box::new(inner_flatten))));
                 }
             }
-            TyTree::Array(inner, len) => {
+            Tree::Array(inner, len) => {
                 let len = *len;
                 let inner_flatten = cu::check!(
                     get_flattened_tree_recur(inner, buckets, depth + 1),
@@ -70,14 +70,14 @@ get_flattened_tree_recur(inner, buckets, depth + 1),
                     if len == 1 {
                         return Ok(Some(inner_flatten));
                     }
-                    return Ok(Some(TyTree::Array(Box::new(inner_flatten), len)));
+                    return Ok(Some(Tree::Array(Box::new(inner_flatten), len)));
                 }
                 // single element optimization
                 if len == 1 {
                     return Ok(Some(inner.as_ref().clone()));
                 }
             }
-            TyTree::Sub(inners) => {
+            Tree::Sub(inners) => {
                 let mut new_vec = Vec::with_capacity(inners.len());
                 for (i, inner) in inners.iter().enumerate() {
                     let inner_flatten = cu::check!(
@@ -94,19 +94,19 @@ get_flattened_tree_recur(inner, buckets, depth + 1),
                     }
                 }
                 if !new_vec.is_empty() {
-                    return Ok(Some(TyTree::Sub(new_vec)));
+                    return Ok(Some(Tree::Sub(new_vec)));
                 }
             }
-            TyTree::Ptmd(this_, inner) => {
+            Tree::Ptmd(this_, inner) => {
                     let inner_flatten = cu::check!(
                         get_flattened_tree_recur(inner, buckets, depth + 1),
                         "failed to flatten ptmd: {inner:#?}"
                     )?;
                 if let Some(inner_flatten) = inner_flatten {
-                    return Ok(Some(TyTree::Ptmd(this_.clone(), Box::new(inner_flatten))));
+                    return Ok(Some(Tree::Ptmd(this_.clone(), Box::new(inner_flatten))));
                 }
             }
-            TyTree::Ptmf(this_, inners) => {
+            Tree::Ptmf(this_, inners) => {
                 let mut new_vec = Vec::with_capacity(inners.len());
                 for (i, inner) in inners.iter().enumerate() {
                     let inner_flatten = cu::check!(
@@ -123,7 +123,7 @@ get_flattened_tree_recur(inner, buckets, depth + 1),
                     }
                 }
                 if !new_vec.is_empty() {
-                    return Ok(Some(TyTree::Ptmf(this_.clone(), new_vec)));
+                    return Ok(Some(Tree::Ptmf(this_.clone(), new_vec)));
                 }
             }
         }
@@ -138,7 +138,7 @@ get_flattened_tree_recur(inner, buckets, depth + 1),
         };
         let bucket_key = bucket.canonical_key();
         match tree {
-            TyTree::Base(inner) => {
+            Tree::Base(inner) => {
                 let inner_key = *inner;
                 if inner_key == bucket_key {
                     cu::bail!("unexpected self-referencing tree: {bucket_key}");

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use cu::pre::*;
 use fxhash::FxHashSet;
-use tyyaml::{Prim, TyTree};
+use tyyaml::{Prim, Tree};
 
 use crate::config::CfgExtract;
 
@@ -34,7 +34,7 @@ impl TypeCompilerUnit {
         {
             let mut replacement = Vec::with_capacity(types.len());
             for (goff, piece) in &types {
-                if let TypePiece::Composite(TyTree::Base(inner)) = piece {
+                if let TypePiece::Tree(Tree::Base(inner)) = piece {
                     let replaced = match inner {
                         None => TypePiece::Prim(Prim::Void),
                         Some(inner) => TypePiece::Alias(*inner),
@@ -93,12 +93,12 @@ impl TypeCompilerUnit {
                 TypeUnitData::Struct(_) => out.structs.insert(bucket_key),
                 TypeUnitData::StructDecl => out.struct_decls.insert(bucket_key),
                 TypeUnitData::Tree(tree) => match tree {
-                    TyTree::Base(_) => false,
-                    TyTree::Array(_, _) => out.tree_arrays.insert(bucket_key),
-                    TyTree::Ptr(_) => out.tree_ptrs.insert(bucket_key),
-                    TyTree::Sub(_) => out.tree_subs.insert(bucket_key),
-                    TyTree::Ptmd(_, _) => out.tree_ptmds.insert(bucket_key),
-                    TyTree::Ptmf(_, _) => out.tree_ptmfs.insert(bucket_key),
+                    Tree::Base(_) => false,
+                    Tree::Array(_, _) => out.tree_arrays.insert(bucket_key),
+                    Tree::Ptr(_) => out.tree_ptrs.insert(bucket_key),
+                    Tree::Sub(_) => out.tree_subs.insert(bucket_key),
+                    Tree::Ptmd(_, _) => out.tree_ptmds.insert(bucket_key),
+                    Tree::Ptmf(_, _) => out.tree_ptmfs.insert(bucket_key),
                 },
             };
         }
@@ -120,12 +120,12 @@ impl TypeCompilerUnit {
                 TypeUnitData::Struct(_) => out.structs+=1,
                 TypeUnitData::StructDecl => out.struct_decls+=1,
                 TypeUnitData::Tree(tree) => match tree {
-                    TyTree::Base(_) => {},
-                    TyTree::Array(_, _) => out.tree_arrays+=1,
-                    TyTree::Ptr(_) => out.tree_ptrs+=1,
-                    TyTree::Sub(_) => out.tree_subs+=1,
-                    TyTree::Ptmd(_, _) => out.tree_ptmds+=1,
-                    TyTree::Ptmf(_, _) => out.tree_ptmfs+=1,
+                    Tree::Base(_) => {},
+                    Tree::Array(_, _) => out.tree_arrays+=1,
+                    Tree::Ptr(_) => out.tree_ptrs+=1,
+                    Tree::Sub(_) => out.tree_subs+=1,
+                    Tree::Ptmd(_, _) => out.tree_ptmds+=1,
+                    Tree::Ptmf(_, _) => out.tree_ptmfs+=1,
                 },
             };
         }
@@ -294,7 +294,7 @@ impl TypeCompilerUnit {
                 unit.data = Some(TypeUnitData::StructDecl);
                 unit.declared_names.insert(name.clone());
             }
-            TypePiece::Composite(ty_tree) => {
+            TypePiece::Tree(ty_tree) => {
                 unit.data = Some(TypeUnitData::Tree(
                     ty_tree.clone().map(|x| x.unwrap_or(Goff::prim(Prim::Void))),
                 ));
@@ -440,7 +440,7 @@ impl TypeCompilerUnit {
             TypePiece::StructDecl(_) => {
                 cu::bail!("encountered declaration while resolving size: struct decl {goff}");
             }
-            TypePiece::Composite(ty_tree) => {
+            TypePiece::Tree(ty_tree) => {
                 self.sizes.insert(goff, Some(u32::MAX));
                 let tree = ty_tree.clone();
                 let size = cu::check!(
@@ -467,9 +467,9 @@ impl TypeCompilerUnit {
         Ok(size)
     }
 
-    fn resolve_size_tree_recur(&mut self, tree: &TyTree<Option<Goff>>) -> cu::Result<Option<u32>> {
+    fn resolve_size_tree_recur(&mut self, tree: &Tree<Option<Goff>>) -> cu::Result<Option<u32>> {
         match tree {
-            TyTree::Base(inner) => {
+            Tree::Base(inner) => {
                 let Some(inner) = inner else {
                     return Ok(None);
                 };
@@ -480,7 +480,7 @@ impl TypeCompilerUnit {
                 )?;
                 Ok(size)
             }
-            TyTree::Array(elemty, len) => {
+            Tree::Array(elemty, len) => {
                 let elem_size = cu::check!(
                     self.resolve_size_tree_recur(elemty),
                     "failed to resolve element size for array type"
@@ -488,13 +488,13 @@ impl TypeCompilerUnit {
                 let elem_size = cu::check!(elem_size, "array element must be sized")?;
                 Ok(Some(elem_size * (*len as u32)))
             }
-            TyTree::Ptr(_) => Ok(self.pointer_type.byte_size()),
-            TyTree::Sub(_) => Ok(None),
-            TyTree::Ptmd(_, _) => {
+            Tree::Ptr(_) => Ok(self.pointer_type.byte_size()),
+            Tree::Sub(_) => Ok(None),
+            Tree::Ptmd(_, _) => {
                 let (ty, len) = self.config.ptmd_repr;
                 Ok(ty.byte_size().map(|x| x * len))
             }
-            TyTree::Ptmf(_, _) => {
+            Tree::Ptmf(_, _) => {
                 let (ty, len) = self.config.ptmf_repr;
                 Ok(ty.byte_size().map(|x| x * len))
             }
@@ -769,13 +769,13 @@ impl TypeUnit {
     }
 }
 
-fn zip_trees(a: &TyTree<Goff>, b: &TyTree<Goff>, map: &BucketMap<Goff, TypeUnit>, merges: &mut BTreeSet<(Goff, Goff)>) -> cu::Result<()> {
+fn zip_trees(a: &Tree<Goff>, b: &Tree<Goff>, map: &BucketMap<Goff, TypeUnit>, merges: &mut BTreeSet<(Goff, Goff)>) -> cu::Result<()> {
     match (a, b) {
-        (TyTree::Base(a), TyTree::Base(b)) => {
+        (Tree::Base(a), Tree::Base(b)) => {
             do_zip(*a, *b, map, merges)?;
             return Ok(());
         }
-        (TyTree::Array(a, len_a), TyTree::Array(b, len_b)) => {
+        (Tree::Array(a, len_a), Tree::Array(b, len_b)) => {
             if len_a != len_b {
                 return Ok(());
             }
@@ -783,11 +783,11 @@ fn zip_trees(a: &TyTree<Goff>, b: &TyTree<Goff>, map: &BucketMap<Goff, TypeUnit>
             cu::check!(zip_trees(a, b, map, merges), "failed to zip array element type")?;
             return Ok(())
         },
-        (TyTree::Ptr(a), TyTree::Ptr(b)) => {
+        (Tree::Ptr(a), Tree::Ptr(b)) => {
             cu::check!(zip_trees(a, b, map, merges), "failed to zip pointee type")?;
             return Ok(())
         }
-        (TyTree::Sub(a), TyTree::Sub(b)) => {
+        (Tree::Sub(a), Tree::Sub(b)) => {
             if a.len() != b.len() {
                 return Ok(())
             }
@@ -797,12 +797,12 @@ fn zip_trees(a: &TyTree<Goff>, b: &TyTree<Goff>, map: &BucketMap<Goff, TypeUnit>
             }
             return Ok(())
         }
-        (TyTree::Ptmd(this_a, a), TyTree::Ptmd(this_b, b)) => {
+        (Tree::Ptmd(this_a, a), Tree::Ptmd(this_b, b)) => {
             cu::check!(do_zip(*this_a, *this_b, map, merges), "failed to zip ptmd this type")?;
             cu::check!(zip_trees(a, b, map, merges), "failed to zip ptmd pointee type")?;
             return Ok(())
         }
-        (TyTree::Ptmf(this_a, a), TyTree::Ptmf(this_b, b)) => {
+        (Tree::Ptmf(this_a, a), Tree::Ptmf(this_b, b)) => {
             cu::check!(do_zip(*this_a, *this_b, map, merges), "failed to zip ptmf this type")?;
             cu::ensure!(a.len() == b.len(), "ptmf being zipped don't have the same type length");
             for (ty_a, ty_b) in std::iter::zip(a, b) {
@@ -833,13 +833,13 @@ pub enum TypeUnitData {
     UnionDecl,
     Struct(TypeUnitStruct),
     StructDecl,
-    Tree(TyTree<Goff>),
+    Tree(Tree<Goff>),
 }
 
 impl TypeUnitData {
     fn absorb(&mut self, other: Self) {
         match self {
-            Self::Tree(TyTree::Base(_)) => {
+            Self::Tree(Tree::Base(_)) => {
                 *self = other;
             }
             Self::Prim(_) | Self::Tree(_) => {
@@ -856,7 +856,7 @@ impl TypeUnitData {
                 }
             }
             _ => match other {
-                Self::Tree(TyTree::Base(_)) => {}
+                Self::Tree(Tree::Base(_)) => {}
                 _ => {
                     *self = other;
                 }
@@ -1075,7 +1075,7 @@ pub struct TypeUnitStructVentry {
     /// Name of the virtual function
     name: Arc<str>,
     /// Types to make up the subroutine type
-    function_types: Vec<TyTree<Goff>>,
+    function_types: Vec<Tree<Goff>>,
     /// If the vtable entry is inherited from base class
     is_from_base: bool,
 }

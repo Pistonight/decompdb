@@ -31,8 +31,14 @@ pub fn load(path: impl AsRef<Path>) -> cu::Result<Config> {
     if Prim::Void == config.extract.ptmf_repr.0 {
         cu::bailfyi!("PTMF repr type must be sized");
     }
+    if config.extract.ptmf_repr.1 == 0 {
+        cu::bailfyi!("PTMF repr type must be non-zero size");
+    }
     if Prim::Void == config.extract.ptmd_repr.0 {
         cu::bailfyi!("PTMD repr type must be sized");
+    }
+    if config.extract.ptmd_repr.1 == 0 {
+        cu::bailfyi!("PTMD repr type must be non-zero size");
     }
 
     Ok(config)
@@ -71,6 +77,32 @@ impl CfgExtract {
             x => cu::bail!("invalid pointer width in config: {x}"),
         };
         Ok(pointer_type)
+    }
+
+    /// Get the byte size of the pointer 
+    pub fn pointer_size(&self) -> cu::Result<u32> {
+        let size = match self.pointer_width {
+            8 => 1,
+            16 => 2,
+            32 => 4,
+            64 => 8,
+            x => cu::bail!("invalid pointer width in config: {x}"),
+        };
+        Ok(size)
+    }
+
+    pub fn ptmd_size(&self) -> cu::Result<u32> {
+        let mut size = cu::check!(self.ptmd_repr.0.byte_size(), "invalid unsized ptmd repr in config")?;
+        size *= self.ptmd_repr.1;
+        cu::ensure!(size != 0, "invalid zero-sized ptmd repr in config");
+        Ok(size)
+    }
+
+    pub fn ptmf_size(&self) -> cu::Result<u32> {
+        let mut size = cu::check!(self.ptmf_repr.0.byte_size(), "invalid unsized ptmf repr in config")?;
+        size *= self.ptmf_repr.1;
+        cu::ensure!(size != 0, "invalid zero-sized ptmf repr in config");
+        Ok(size)
     }
 }
 

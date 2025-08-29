@@ -1,6 +1,6 @@
 /// A Generic Type Tree
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TyTree<Repr> {
+pub enum Tree<Repr> {
     /// A basic type
     ///
     /// TyYAML representation is `[ TYPE_ID ]`
@@ -29,7 +29,7 @@ pub enum TyTree<Repr> {
     Ptmf(Repr /*base*/, Vec<Self> /*[retty, args]*/),
 }
 
-impl<Repr> TyTree<Repr> {
+impl<Repr> Tree<Repr> {
     /// Create a pointer type
     #[inline(always)]
     pub fn ptr(pointee: impl Into<Self>) -> Self {
@@ -51,17 +51,17 @@ impl<Repr> TyTree<Repr> {
     /// Get the complexity (nesting level) of the type
     pub fn complexity<F: Fn(&Repr) -> usize>(&self, f: F) -> usize {
         match self {
-            TyTree::Base(x) => f(x),
-            TyTree::Array(elem, _) => 1 + elem.complexity(f),
-            TyTree::Ptr(pointee) => 1 + pointee.complexity(f),
-            TyTree::Sub(types) => {
+            Tree::Base(x) => f(x),
+            Tree::Array(elem, _) => 1 + elem.complexity(f),
+            Tree::Ptr(pointee) => 1 + pointee.complexity(f),
+            Tree::Sub(types) => {
                 let Some(first) = types.first() else {
                     return 1;
                 };
                 1 + first.complexity(f)
             }
-            TyTree::Ptmd(_, pointee) => 2 + pointee.complexity(f),
-            TyTree::Ptmf(_, types) => {
+            Tree::Ptmd(_, pointee) => 2 + pointee.complexity(f),
+            Tree::Ptmf(_, types) => {
                 let Some(first) = types.first() else {
                     return 2;
                 };
@@ -70,80 +70,84 @@ impl<Repr> TyTree<Repr> {
         }
     }
 
-    pub fn map<T, F: FnMut(Repr) -> T>(self, mut f: F) -> TyTree<T> {
+    pub fn map<T, F: FnMut(Repr) -> T>(self, mut f: F) -> Tree<T> {
         match self {
-            TyTree::Base(x) => TyTree::Base(f(x)),
-            TyTree::Array(x, len) => TyTree::Array(Box::new(x.map(f)), len),
-            TyTree::Ptr(x) => TyTree::Ptr(Box::new(x.map(f))),
-            TyTree::Sub(x) => {
+            Tree::Base(x) => Tree::Base(f(x)),
+            Tree::Array(x, len) => Tree::Array(Box::new(x.map(f)), len),
+            Tree::Ptr(x) => Tree::Ptr(Box::new(x.map(f))),
+            Tree::Sub(x) => {
                 let mut x2 = Vec::with_capacity(x.len());
                 let mut f_erased: Box<dyn FnMut(Repr) -> T> = Box::new(f);
                 for t in x {
                     x2.push(t.map(&mut f_erased));
                 }
-                TyTree::Sub(x2)
+                Tree::Sub(x2)
             }
-            TyTree::Ptmd(x, y) => {
+            Tree::Ptmd(x, y) => {
                 let x = f(x);
                 let y = y.map(f);
-                TyTree::Ptmd(x, Box::new(y))
+                Tree::Ptmd(x, Box::new(y))
             }
-            TyTree::Ptmf(x, y) => {
+            Tree::Ptmf(x, y) => {
                 let x = f(x);
                 let mut y2 = Vec::with_capacity(y.len());
                 let mut f_erased: Box<dyn FnMut(Repr) -> T> = Box::new(f);
                 for t in y {
                     y2.push(t.map(&mut f_erased));
                 }
-                TyTree::Ptmf(x, y2)
+                Tree::Ptmf(x, y2)
             }
         }
     }
-    pub fn for_each_mut<F: FnMut(&mut Repr)>(&mut self, mut f: F) {
+    pub fn for_each<F: FnMut(&Repr) -> cu::Result<()>>(&self, mut f: F) -> cu::Result<()> {
         match self {
-            TyTree::Base(x) => f(x),
-            TyTree::Array(x, _) => x.for_each_mut(f),
-            TyTree::Ptr(x) => x.for_each_mut(f),
-            TyTree::Sub(x) => {
-                let mut f_erased: Box<dyn FnMut(&mut Repr)> = Box::new(f);
+            Tree::Base(x) => f(x),
+            Tree::Array(x, _) => x.for_each(f),
+            Tree::Ptr(x) => x.for_each(f),
+            Tree::Sub(x) => {
+                let mut f_erased: Box<dyn FnMut(&Repr) -> cu::Result<()>> = Box::new(f);
                 for t in x {
-                    t.for_each_mut(&mut f_erased)
+                    t.for_each(&mut f_erased)?;
                 }
+                Ok(())
             }
-            TyTree::Ptmd(x, y) => {
-                f(x);
-                y.for_each_mut(f);
+            Tree::Ptmd(x, y) => {
+                f(x)?;
+                y.for_each(f)
             }
-            TyTree::Ptmf(x, y) => {
-                f(x);
-                let mut f_erased: Box<dyn FnMut(&mut Repr)> = Box::new(f);
+            Tree::Ptmf(x, y) => {
+                f(x)?;
+                let mut f_erased: Box<dyn FnMut(&Repr) -> cu::Result<()>> = Box::new(f);
                 for t in y {
-                    t.for_each_mut(&mut f_erased)
+                    t.for_each(&mut f_erased)?;
                 }
+                Ok(())
             }
         }
     }
-    pub fn for_each<F: FnMut(&Repr)>(&self, mut f: F) {
+    pub fn for_each_mut<F: FnMut(&mut Repr) -> cu::Result<()> >(&mut self, mut f: F) -> cu::Result<()> {
         match self {
-            TyTree::Base(x) => f(x),
-            TyTree::Array(x, _) => x.for_each(f),
-            TyTree::Ptr(x) => x.for_each(f),
-            TyTree::Sub(x) => {
-                let mut f_erased: Box<dyn FnMut(&Repr)> = Box::new(f);
+            Tree::Base(x) => f(x),
+            Tree::Array(x, _) => x.for_each_mut(f),
+            Tree::Ptr(x) => x.for_each_mut(f),
+            Tree::Sub(x) => {
+                let mut f_erased: Box<dyn FnMut(&mut Repr) -> cu::Result<()>> = Box::new(f);
                 for t in x {
-                    t.for_each(&mut f_erased)
+                    t.for_each_mut(&mut f_erased)?;
                 }
+                Ok(())
             }
-            TyTree::Ptmd(x, y) => {
-                f(x);
-                y.for_each(f);
+            Tree::Ptmd(x, y) => {
+                f(x)?;
+                y.for_each_mut(f)
             }
-            TyTree::Ptmf(x, y) => {
-                f(x);
-                let mut f_erased: Box<dyn FnMut(&Repr)> = Box::new(f);
+            Tree::Ptmf(x, y) => {
+                f(x)?;
+                let mut f_erased: Box<dyn FnMut(&mut Repr) -> cu::Result<()>> = Box::new(f);
                 for t in y {
-                    t.for_each(&mut f_erased)
+                    t.for_each_mut(&mut f_erased)?;
                 }
+                Ok(())
             }
         }
     }

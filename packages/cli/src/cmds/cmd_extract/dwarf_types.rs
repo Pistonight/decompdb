@@ -7,12 +7,12 @@ use tyyaml::Prim;
 
 // convienience type aliases
 pub type In<'i> = gimli::EndianSlice<'i, gimli::LittleEndian>;
-pub type Unit<'i> = gimli::Unit<In<'i>>;
-pub type UnitHeader<'i> = gimli::UnitHeader<In<'i>>;
-pub type Tree<'i, 'a, 'u> = gimli::EntriesTree<'a, 'u, In<'i>>;
-pub type Node<'i, 'a, 'u, 't> = gimli::EntriesTreeNode<'a, 'u, 't, In<'i>>;
-pub type Dwarf<'i> = gimli::Dwarf<In<'i>>;
-pub type Die<'i, 'a, 'u> = gimli::DebuggingInformationEntry<'a, 'u, In<'i>, usize>;
+// pub type Unit<'i> = gimli::Unit<In<'i>>;
+// pub type UnitHeader<'i> = gimli::UnitHeader<In<'i>>;
+// pub type Tree<'i, 'a, 'u> = gimli::EntriesTree<'a, 'u, In<'i>>;
+// pub type Node<'i, 'a, 'u, 't> = gimli::EntriesTreeNode<'a, 'u, 't, In<'i>>;
+// pub type Dwarf<'i> = gimli::Dwarf<In<'i>>;
+// pub type Die<'i, 'a, 'u> = gimli::DebuggingInformationEntry<'a, 'u, In<'i>, usize>;
 pub type Tag = gimli::DwTag;
 pub type GoffMap<T> = BTreeMap<Goff, T>;
 
@@ -78,6 +78,22 @@ impl Goff {
         };
         Self(s)
     }
+
+    pub const fn pointer() -> Self {
+        Self(0x2FFFF0000)
+    }
+
+    pub const fn ptmd() -> Self {
+        Self(0x2FFFF0001)
+    }
+
+    pub const fn ptmf() -> Self {
+        Self(0x2FFFF0002)
+    }
+
+    pub const fn is_prim(self) -> bool {
+        return self.0 >= 0x1FFFF0000
+    }
 }
 
 pub fn is_type_tag(tag: Tag) -> bool {
@@ -107,3 +123,7 @@ pub fn is_type_tag(tag: Tag) -> bool {
         _tag => false
     }
 }
+
+// if something has size this big it's probably wrong, so it's fine to use
+// as special value
+pub const UNSIZED: u32 = u32::MAX;

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cu::pre::*;
 use gimli::AttributeValue;
-use tyyaml::{Prim, TyTree};
+use tyyaml::{Prim, Tree};
 
 use crate::config::CfgExtract;
 
@@ -125,7 +125,7 @@ impl<'i> CompUnit<'_, 'i> {
                     self.load_subroutine_types_from_entry(entry, false),
                     "failed to read subroutine type at {offset}"
                 )?;
-                TypePiece::Composite(TyTree::Sub(subroutine_types))
+                TypePiece::Tree(Tree::Sub(subroutine_types))
             }
             // PTMD/PTMF
             DW_TAG_ptr_to_member_type => {
@@ -150,15 +150,15 @@ impl<'i> CompUnit<'_, 'i> {
                             self.load_subroutine_types_from_entry(&pointee_entry, false),
                             "failed to read pointee subroutine type for pointer-to-member-function type at {offset}"
                         )?;
-                        TypePiece::Composite(TyTree::ptmf(this_ty_goff, subroutine_types))
+                        TypePiece::Tree(Tree::ptmf(this_ty_goff, subroutine_types))
                     } else {
                         // PTMD
                         let pointee_ty_goff = self.goff(pointee_ty_loff);
-                        TypePiece::Composite(TyTree::ptmd(this_ty_goff, TyTree::Base(Some(pointee_ty_goff))))
+                        TypePiece::Tree(Tree::ptmd(this_ty_goff, Tree::Base(Some(pointee_ty_goff))))
                     }
                 } else {
                     // PTMD to void
-                    TypePiece::Composite(TyTree::ptmd(this_ty_goff, TyTree::Base(None)))
+                    TypePiece::Tree(Tree::ptmd(this_ty_goff, Tree::Base(None)))
                 }
             }
             DW_TAG_base_type => TypePiece::Prim(self.load_base_type_from_entry(entry)?),
@@ -218,7 +218,7 @@ impl<'i> CompUnit<'_, 'i> {
         &self,
         entry: &Die<'i, '_, '_>,
         allow_other_tags: bool,
-    ) -> cu::Result<Vec<TyTree<Option<Goff>>>> {
+    ) -> cu::Result<Vec<Tree<Option<Goff>>>> {
         let offset = self.entry_goff(entry);
         let rettype_loff = cu::check!(
             self.entry_type_offset_opt(entry),
@@ -226,8 +226,8 @@ impl<'i> CompUnit<'_, 'i> {
         )?;
         let retty = match rettype_loff {
             // void
-            None => TyTree::Base(None),
-            Some(local_off) => TyTree::Base(Some(self.goff(local_off))),
+            None => Tree::Base(None),
+            Some(local_off) => Tree::Base(Some(self.goff(local_off))),
         };
         let mut types = Vec::with_capacity(16);
         let mut found_void = false;
@@ -244,7 +244,7 @@ impl<'i> CompUnit<'_, 'i> {
             let local_off = cu::check!(self.entry_type_offset_opt(entry), "failed to read parameter type for subroutine-like type at {offset}")?;
             if let Some(local_off) = local_off {
                 // skip void parameters
-                types.push(TyTree::Base(Some(self.goff(local_off))));
+                types.push(Tree::Base(Some(self.goff(local_off))));
             } else {
                 found_void = true;
             }
@@ -727,15 +727,15 @@ pub enum TypePiece {
     /// Declaration of struct or class
     StructDecl(String),
     /// Composition of other types
-    Composite(TyTree<Option<Goff>>),
+    Tree(Tree<Option<Goff>>),
 }
 
 impl TypePiece {
     fn ptr(offset: Goff) -> Self {
-        TypePiece::Composite(TyTree::ptr(TyTree::Base(Some(offset))))
+        TypePiece::Tree(Tree::ptr(Tree::Base(Some(offset))))
     }
     fn array(offset: Goff, len: u32) -> Self {
-        TypePiece::Composite(TyTree::array(TyTree::Base(Some(offset)), len as usize))
+        TypePiece::Tree(Tree::array(Tree::Base(Some(offset)), len as usize))
     }
 }
 
@@ -776,13 +776,6 @@ pub struct TypePieceStructMember {
     pub special: Option<SpecialMember>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SpecialMember {
-    Base,
-    Vfptr,
-    Bitfield(u32), // byte_size
-}
-
 impl TypePieceStructMember {
     pub fn is_base(&self) -> bool {
         matches!(self.special, Some(SpecialMember::Base))
@@ -803,5 +796,5 @@ pub struct TypePieceVtableEntry {
     /// Name of the virtual function
     pub name: Arc<str>,
     /// Types to make up the subroutine type
-    pub function_types: Vec<TyTree<Option<Goff>>>,
+    pub function_types: Vec<Tree<Option<Goff>>>,
 }

@@ -1,6 +1,6 @@
 use cu::pre::*;
 
-use crate::{Prim, Ty, TyTree};
+use crate::{Prim, Ty, Tree};
 
 /// A TyYAML Type representation.
 ///
@@ -11,7 +11,7 @@ use crate::{Prim, Ty, TyTree};
 /// is what you see in documentation. The `to_string` implementation will print
 /// a CPP-like type syntax, but note pointer-to-member types might not be the same syntax if the
 /// pointee or return type is an array or a pointer-to-subroutine type.
-pub type Type = TyTree<Ty>;
+pub type Type = Tree<Ty>;
 impl From<Prim> for Type {
     fn from(value: Prim) -> Self {
         Self::Base(Ty::Prim(value))
