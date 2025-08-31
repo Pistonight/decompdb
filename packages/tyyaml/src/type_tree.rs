@@ -125,7 +125,10 @@ impl<Repr> Tree<Repr> {
             }
         }
     }
-    pub fn for_each_mut<F: FnMut(&mut Repr) -> cu::Result<()> >(&mut self, mut f: F) -> cu::Result<()> {
+    pub fn for_each_mut<F: FnMut(&mut Repr) -> cu::Result<()>>(
+        &mut self,
+        mut f: F,
+    ) -> cu::Result<()> {
         match self {
             Tree::Base(x) => f(x),
             Tree::Array(x, _) => x.for_each_mut(f),
@@ -193,7 +196,11 @@ impl<Repr: std::fmt::Display> std::fmt::Display for Tree<Repr> {
                 write!(f, ")")
             }
         };
-        fn write_tyyaml_args<'a, Repr: std::fmt::Display + 'a, I: Iterator<Item = &'a Tree<Repr>>>(
+        fn write_tyyaml_args<
+            'a,
+            Repr: std::fmt::Display + 'a,
+            I: Iterator<Item = &'a Tree<Repr>>,
+        >(
             mut iter: I,
             f: &mut std::fmt::Formatter<'_>,
         ) -> std::fmt::Result {

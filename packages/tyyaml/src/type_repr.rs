@@ -1,6 +1,6 @@
 use cu::pre::*;
 
-use crate::{Prim, Ty, Tree};
+use crate::{Prim, Tree, Ty};
 
 /// A TyYAML Type representation.
 ///

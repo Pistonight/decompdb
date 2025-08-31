@@ -105,10 +105,10 @@ async fn run_internal(config: Config) -> cu::Result<()> {
         }
         drop(bar);
         cu::info!("stage1: loaded {type_count} types");
+        stage1s.sort_by(|a, b| a.name.cmp(&b.name));
         stage1s
     };
     //
-    // compilers.sort_by(|a, b| a.name.cmp(&b.name));
 
     // let linked_types = type_linker::link_types(compilers).await.context("type linking failed")?;
     //
