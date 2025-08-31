@@ -79,7 +79,7 @@ impl CfgExtract {
         Ok(pointer_type)
     }
 
-    /// Get the byte size of the pointer 
+    /// Get the byte size of the pointer
     pub fn pointer_size(&self) -> cu::Result<u32> {
         let size = match self.pointer_width {
             8 => 1,

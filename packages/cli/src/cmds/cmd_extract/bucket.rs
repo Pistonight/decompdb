@@ -54,10 +54,16 @@ impl<K: Copy + PartialEq + Ord + std::fmt::Display, V: BucketValue> BucketMap<K,
     }
 
     pub fn add_key(&mut self, key: K, new_key: K) -> cu::Result<()> {
-        let (i, bucket) = cu::check!(self.bucket_mut(key), "error in add_key: cannot find bucket with key {key}")?;
+        let (i, bucket) = cu::check!(
+            self.bucket_mut(key),
+            "error in add_key: cannot find bucket with key {key}"
+        )?;
         bucket.other_keys.insert(new_key);
         self.key_to_index.insert(new_key, i);
-        cu::check!(self.check(), "error in add_key: bucket map is invalid after adding new key {new_key} to key {key}")?;
+        cu::check!(
+            self.check(),
+            "error in add_key: bucket map is invalid after adding new key {new_key} to key {key}"
+        )?;
         Ok(())
     }
 
@@ -75,10 +81,13 @@ impl<K: Copy + PartialEq + Ord + std::fmt::Display, V: BucketValue> BucketMap<K,
     }
 
     pub fn canonical_key_map(&self) -> BTreeMap<K, K> {
-        self.key_to_index.iter().map(|(k, i)| {
-            let ck = self.buckets.get(*i).unwrap().as_ref().unwrap().canonical_key();
-            (*k, ck)
-        }).collect()
+        self.key_to_index
+            .iter()
+            .map(|(k, i)| {
+                let ck = self.buckets.get(*i).unwrap().as_ref().unwrap().canonical_key();
+                (*k, ck)
+            })
+            .collect()
     }
 
     pub fn canonical_key(&self, key: K) -> K {
@@ -186,7 +195,9 @@ impl<K: Copy + PartialEq + Ord + std::fmt::Display, V: BucketValue> BucketMap<K,
     /// Extend this map with another. The 2 maps must have disjoint key sets
     pub fn extend(&mut self, other: Self) -> cu::Result<()> {
         for bucket in other.buckets.into_iter().flatten() {
-            let i = self.insert_new_internal(bucket.canonical_key(), bucket.value).context("error in extend: the 2 maps have overlapping key sets")?;
+            let i = self
+                .insert_new_internal(bucket.canonical_key(), bucket.value)
+                .context("error in extend: the 2 maps have overlapping key sets")?;
             let new_bucket = self.buckets.get_mut(i).unwrap().as_mut().unwrap();
             new_bucket.other_keys = bucket.other_keys;
             for key in &new_bucket.other_keys {
@@ -219,26 +230,34 @@ impl<K: Copy + PartialEq + Ord + std::fmt::Display, V: BucketValue> BucketMap<K,
                         cu::bail!("key {bucket_key} is in multiple buckets");
                     }
                     if bucket.other_keys.contains(&bucket_key) {
-                        cu::bail!("bucket map check failed: bucket {i} has its canonical key {bucket_key} inside other_keys");
+                        cu::bail!(
+                            "bucket map check failed: bucket {i} has its canonical key {bucket_key} inside other_keys"
+                        );
                     }
                     for k in &bucket.other_keys {
                         if !keys_in_buckets.insert(*k) {
                             cu::bail!("key {bucket_key} is in multiple buckets");
                         }
                         if self.key_to_index.get(k).is_none() {
-                            cu::bail!("bucket map check failed: bucket {i} with key {bucket_key} has key {k}, but the key {k} is unlinked");
+                            cu::bail!(
+                                "bucket map check failed: bucket {i} with key {bucket_key} has key {k}, but the key {k} is unlinked"
+                            );
                         }
                     }
                     for (k, ki) in &self.key_to_index {
                         let is_this_bucket = i == *ki;
                         if bucket_key == *k || bucket.other_keys.contains(k) {
                             if !is_this_bucket {
-                                cu::bail!("bucket map check failed: bucket {i} with key {bucket_key} has key {k}, but {k} links to bucket {ki}");
+                                cu::bail!(
+                                    "bucket map check failed: bucket {i} with key {bucket_key} has key {k}, but {k} links to bucket {ki}"
+                                );
                             }
                             continue;
                         }
                         if is_this_bucket {
-                            cu::bail!("bucket map check failed: key {k} links to bucket {i}, but the key {k} is not in that bucket");
+                            cu::bail!(
+                                "bucket map check failed: key {k} links to bucket {i}, but the key {k} is not in that bucket"
+                            );
                         }
                     }
                 }
@@ -295,7 +314,7 @@ impl<K: std::fmt::Debug + Copy, V: std::fmt::Debug> std::fmt::Debug for BucketMa
 pub struct GoffBuckets {
     index_map: BTreeMap<Goff, usize>,
     buckets: Vec<BTreeSet<Goff>>,
-    free_list: Vec<usize>
+    free_list: Vec<usize>,
 }
 
 impl GoffBuckets {
@@ -318,9 +337,11 @@ impl GoffBuckets {
         self.primary_from_index(i)
     }
 
-    pub fn primaries(&self) -> impl Iterator<Item=Goff> {
-        self.buckets.iter().filter(|x| !x.is_empty())
-        .filter_map(Self::primary_from_bucket)
+    pub fn primaries(&self) -> impl Iterator<Item = Goff> {
+        self.buckets
+            .iter()
+            .filter(|x| !x.is_empty())
+            .filter_map(Self::primary_from_bucket)
     }
 
     /// Insert a new goff to the buckets.
@@ -336,10 +357,8 @@ impl GoffBuckets {
                 self.buckets[i].insert(k);
                 self.index_map.insert(k, i);
                 None
-            },
-            Some(i) => {
-                self.primary_from_index(i)
             }
+            Some(i) => self.primary_from_index(i),
         }
     }
 
@@ -381,8 +400,14 @@ impl GoffBuckets {
             // already in the same bucket
             return Ok(());
         }
-        let (k_to, k_from) = cu::check!(pick_bucket_primary_key(k1_primary, k2_primary), "merge: failed to pick primary key when merging {k1} and {k2}")?;
-        let i_from = *cu::check!(self.index_map.get(&k_from), "merge: unexpected k_from not found: {k_from}")?;
+        let (k_to, k_from) = cu::check!(
+            pick_bucket_primary_key(k1_primary, k2_primary),
+            "merge: failed to pick primary key when merging {k1} and {k2}"
+        )?;
+        let i_from = *cu::check!(
+            self.index_map.get(&k_from),
+            "merge: unexpected k_from not found: {k_from}"
+        )?;
         let i_to = *cu::check!(self.index_map.get(&k_to), "merge: unexpected k_to not found: {k_to}")?;
         let keys_from = self.remove_bucket(i_from);
         for k in &keys_from {
@@ -407,14 +432,49 @@ impl GoffBuckets {
         self.free_list.push(i);
         std::mem::take(&mut self.buckets[i])
     }
-
 }
+
+#[derive(Default, Clone, IntoIterator)]
+pub struct MergeQueue(Vec<(Goff, Goff)>);
+impl MergeQueue {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    /// Enqueue a merge, return the primary and other key
+    pub fn push(&mut self, k1: Goff, k2: Goff) -> cu::Result<(Goff, Goff)> {
+        if k1 == k2 {
+            return Ok((k1, k2));
+        }
+        let result = pick_bucket_primary_key(k1, k2)?;
+        self.0.push(result);
+        Ok(result)
+    }
+
+    pub fn pop(&mut self) -> Option<(Goff, Goff)> {
+        self.0.pop()
+    }
+
+    pub fn extend<I: IntoIterator<Item = (Goff, Goff)>>(&mut self, iter: I) -> cu::Result<()> {
+        for (k1, k2) in iter {
+            self.push(k1, k2)?;
+        }
+        Ok(())
+    }
+}
+// impl IntoIterator for MergeQueue {
+//     type Item = (Goff, Goff);
+//     type IntoIter = std::vec::IntoIter<(Goff, Goff)>;
+//
+//     fn into_iter(self) -> Self::IntoIter {
+//         self.0.into_iter()
+//     }
+// }
 
 fn pick_bucket_primary_key(k1: Goff, k2: Goff) -> cu::Result<(Goff, Goff)> {
     match (k1.is_prim(), k2.is_prim()) {
         (true, true) => cu::bail!("cannot have 2 different primitive goffs in the same bucket: {k1} and {k2}"),
         (true, false) => Ok((k1, k2)),
         (false, true) => Ok((k2, k1)),
-        (false, false) => Ok(if k1 < k2 { (k1, k2) } else { (k2, k1) })
+        (false, false) => Ok(if k1 < k2 { (k1, k2) } else { (k2, k1) }),
     }
 }

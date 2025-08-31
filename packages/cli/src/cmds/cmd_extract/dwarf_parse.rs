@@ -1,11 +1,15 @@
-use std::{borrow::Cow, sync::Arc};
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use cu::pre::*;
 use elf::ElfBytes;
 use elf::endian::LittleEndian as ElfLittleEndian;
-use gimli::{Abbreviations, AttributeValue, Operation, UnitSectionOffset,
-    DwarfFileType, EndianSlice, LittleEndian as DwarfLittleEndian
+use gimli::{
+    Abbreviations, AttributeValue, DwarfFileType, EndianSlice, LittleEndian as DwarfLittleEndian, Operation,
+    UnitSectionOffset,
 };
+use tyyaml::Prim;
 
 use super::pre::*;
 
@@ -15,51 +19,49 @@ pub type Tag = gimli::DwTag;
 /// Holder of Dwarf info, backed by a shared ELF buffer
 pub struct Dwarf {
     dwarf: gimli::Dwarf<In<'static>>,
-    buf: ArcBuf
+    buf: ArcBuf,
 }
 
 impl Dwarf {
-/// Parse the DWARF in the ELF bytes
+    /// Parse the DWARF in the ELF bytes
     pub fn try_parse(buf: Arc<[u8]>) -> cu::Result<Arc<Self>> {
         let raw_buf = ArcBuf::new(buf);
         // safety: the lifetime of raw_buf_ref is managed
         // by the Arc.
         let raw_buf_ref: &'static [u8] = unsafe { &*raw_buf.0 };
-    let elf_data = ElfBytes::<ElfLittleEndian>::minimal_parse(raw_buf_ref).context("failed to parse ELF")?;
-    let mut dwarf = gimli::Dwarf::load(|section| {
-        let section_name = section.name();
-        cu::debug!("loading ELF section {section_name}");
-        let header = cu::check!(
-            elf_data.section_header_by_name(section_name),
-            "cannot read ELF section header for section {section_name}"
-        )?;
-        let endian_slice = match header {
-            Some(header) => {
-                let start = header.sh_offset as usize;
-                let end = start + header.sh_size as usize;
-                cu::debug!("found ELF section {section_name} at byte start=0x{start:016x}, end=0x{end:016x}");
-                EndianSlice::new(&raw_buf_ref[start..end], DwarfLittleEndian)
-            }
-            None => {
-                cu::debug!("did not found ELF section {section_name}");
-                EndianSlice::new(&[], DwarfLittleEndian)
-            }
-        };
-        cu::Ok(endian_slice)
-    })
-    .context("failed to load DWARF from ELF")?;
-    dwarf.file_type = DwarfFileType::Main;
+        let elf_data = ElfBytes::<ElfLittleEndian>::minimal_parse(raw_buf_ref).context("failed to parse ELF")?;
+        let mut dwarf = gimli::Dwarf::load(|section| {
+            let section_name = section.name();
+            cu::debug!("loading ELF section {section_name}");
+            let header = cu::check!(
+                elf_data.section_header_by_name(section_name),
+                "cannot read ELF section header for section {section_name}"
+            )?;
+            let endian_slice = match header {
+                Some(header) => {
+                    let start = header.sh_offset as usize;
+                    let end = start + header.sh_size as usize;
+                    cu::debug!("found ELF section {section_name} at byte start=0x{start:016x}, end=0x{end:016x}");
+                    EndianSlice::new(&raw_buf_ref[start..end], DwarfLittleEndian)
+                }
+                None => {
+                    cu::debug!("did not found ELF section {section_name}");
+                    EndianSlice::new(&[], DwarfLittleEndian)
+                }
+            };
+            cu::Ok(endian_slice)
+        })
+        .context("failed to load DWARF from ELF")?;
+        dwarf.file_type = DwarfFileType::Main;
 
-        Ok(Arc::new(Self {
-            dwarf, buf: raw_buf
-        }))
+        Ok(Arc::new(Self { dwarf, buf: raw_buf }))
     }
 
     pub fn iter_units(self_: &Arc<Self>) -> UnitIter {
         let iter = self_.dwarf.debug_info.units();
         UnitIter {
             debug_info_iter: iter,
-            dwarf: Arc::clone(&self_)
+            dwarf: Arc::clone(&self_),
         }
     }
 }
@@ -83,10 +85,12 @@ impl UnitIter {
         };
         let unit = cu::check!(
             gimli::Unit::new(&self.dwarf.dwarf, header),
-            "failed to create debug info unit")?;
+            "failed to create debug info unit"
+        )?;
         let abbrevs = cu::check!(
             header.abbreviations(&self.dwarf.dwarf.debug_abbrev),
-            "failed to create debug info unit abbrevs")?;
+            "failed to create debug info unit abbrevs"
+        )?;
         let mut unit = Unit {
             unit,
             header,
@@ -128,34 +132,23 @@ impl Unit {
     }
     fn entries_tree(&self, loff: Option<Loff>) -> cu::Result<EntriesTree<'_>> {
         let tree = match loff {
-            None => {
-                cu::check!(self.unit.entries_tree(None), "failed to parse root for {self}")?
-            }
-            Some(loff) => {
-                cu::check!(
-                    self.unit.entries_tree(Some(loff.into())),
-                    "failed to parse tree at {} for {self}",
-                    self.goff(loff)
-                )?
-            }
+            None => cu::check!(self.unit.entries_tree(None), "failed to parse root for {self}")?,
+            Some(loff) => cu::check!(
+                self.unit.entries_tree(Some(loff.into())),
+                "failed to parse tree at {} for {self}",
+                self.goff(loff)
+            )?,
         };
-        Ok(EntriesTree {
-            unit: self,
-            tree,
-        })
+        Ok(EntriesTree { unit: self, tree })
     }
 
     /// Get a single entry at offset
-    pub fn entry_at(&self, loff: Loff) -> cu::Result<Die<'_, 'static>> {
+    pub fn entry_at<'x>(&'x self, loff: Loff) -> cu::Result<Die<'x, 'x>> {
         let entry = self.unit.entry(loff.into());
-        let entry = cu::check!(
-            entry,
-            "failed to read entry at {} for {self}",
-            self.goff(loff)
-        )?;
+        let entry = cu::check!(entry, "failed to read entry at {} for {self}", self.goff(loff))?;
         Ok(Die {
             unit: self,
-            entry: Cow::Owned(entry)
+            entry: Cow::Owned(entry),
         })
     }
 
@@ -235,7 +228,7 @@ impl<'x> DieNode<'x, '_> {
         let entry = self.node.entry();
         Die {
             unit: self.unit,
-            entry: Cow::Borrowed(entry)
+            entry: Cow::Borrowed(entry),
         }
     }
     pub fn goff(&self) -> Goff {
@@ -255,7 +248,7 @@ impl<'x> DieNode<'x, '_> {
         )? {
             let node = DieNode {
                 node: child,
-                unit: self.unit
+                unit: self.unit,
             };
             let child_offset = node.goff();
             cu::check!(f(node), "error while processing child entry at {child_offset}")?;
@@ -274,6 +267,9 @@ impl<'x> Die<'x, '_> {
     pub fn goff(&self) -> Goff {
         (self.entry.offset().0 + usize::from(self.unit.offset)).into()
     }
+    pub fn to_global(&self, loff: Loff) -> Goff {
+        self.unit.goff(loff)
+    }
     /// Get the unit
     pub fn unit(&self) -> &'x Unit {
         self.unit
@@ -289,21 +285,35 @@ impl<'x> Die<'x, '_> {
     pub fn name(&self) -> cu::Result<&str> {
         let value = self.name_opt()?;
         let offset = self.goff();
-        let value = cu::check!(value, "DW_AT_name is missing for entry at offset {offset} in {}", self.unit)?;
+        let value = cu::check!(
+            value,
+            "DW_AT_name is missing for entry at offset {offset} in {}",
+            self.unit
+        )?;
         Ok(value)
     }
 
     /// Get the DW_AT_name of a DIE, if it exists
     pub fn name_opt(&self) -> cu::Result<Option<&str>> {
+        self.str_opt(DW_AT_name)
+    }
+
+    /// Get a string attribute value
+    pub fn str_opt(&self, attr: DwAt) -> cu::Result<Option<&str>> {
         let offset = self.goff();
         let value = cu::check!(
-            self.entry.attr_value(DW_AT_name),
-            "failed to read DW_AT_name at {offset} in {}", self.unit
+            self.entry.attr_value(attr),
+            "failed to read {attr} at {offset} in {}",
+            self.unit
         )?;
         let Some(value) = value else {
             return Ok(None);
         };
-        let value = cu::check!(self.unit.attr_string(value), "failed to read value for name attribute at {offset} in {}", self.unit)?;
+        let value = cu::check!(
+            self.unit.attr_string(value),
+            "failed to read value for {attr} at {offset} in {}",
+            self.unit
+        )?;
         Ok(Some(value))
     }
     /// Get a signed integer attribute value
@@ -375,6 +385,70 @@ impl<'x> Die<'x, '_> {
         }
     }
 
+    /// Read an attribute of a DIE, expecting a unit reference (local offset)
+    pub fn loff(&self, attr: DwAt) -> cu::Result<Loff> {
+        let t = self.loff_opt(attr)?;
+        cu::check!(t, "missing {attr} for entry at offset {}", self.goff())
+    }
+
+    /// Read an attribute of a DIE, expecting a local offset, allowing it to be missing
+    pub fn loff_opt(&self, attr: DwAt) -> cu::Result<Option<Loff>> {
+        let offset = self.goff();
+        let type_value = cu::check!(self.entry.attr_value(attr), "failed to read {attr} at offset {offset}")?;
+        let Some(type_value) = type_value else {
+            return Ok(None);
+        };
+        let type_offset = match type_value {
+            AttributeValue::UnitRef(offset) => offset,
+            _ => cu::bail!("expecting {attr} to be a unit ref at offset {offset}"),
+        };
+        Ok(Some(type_offset.into()))
+    }
+
+    /// Read this entry as a primitive type node
+    pub fn prim_type(&self) -> cu::Result<Prim> {
+        let offset = self.goff();
+        let encoding = cu::check!(
+            self.entry.attr_value(DW_AT_encoding),
+            "failed to read DW_AT_encoding for primitive type at offset {offset}"
+        )?;
+        let encoding = cu::check!(encoding, "missing DW_AT_encoding for primitive type at offset {offset}")?;
+        let AttributeValue::Encoding(encoding) = encoding else {
+            cu::bail!("expecting an Encoding attribute for DW_AT_encoding for primitive type at offset {offset}");
+        };
+        let byte_size = cu::check!(
+            self.uint(DW_AT_byte_size),
+            "failed to get byte size for primitive type at offset {offset}"
+        )?;
+        let prim = match (encoding, byte_size) {
+            (DW_ATE_boolean, 0x1) => Prim::Bool,
+            (DW_ATE_unsigned, 0x1) => Prim::U8,
+            (DW_ATE_unsigned_char, 0x1) => Prim::U8,
+            (DW_ATE_signed, 0x1) => Prim::I8,
+            (DW_ATE_signed_char, 0x1) => Prim::I8,
+
+            (DW_ATE_unsigned, 0x2) => Prim::U16,
+            (DW_ATE_signed, 0x2) => Prim::I16,
+            (DW_ATE_UTF, 0x2) => Prim::U16,
+
+            (DW_ATE_unsigned, 0x4) => Prim::U32,
+            (DW_ATE_signed, 0x4) => Prim::I32,
+            (DW_ATE_float, 0x4) => Prim::F32,
+
+            (DW_ATE_unsigned, 0x8) => Prim::U64,
+            (DW_ATE_signed, 0x8) => Prim::I64,
+            (DW_ATE_float, 0x8) => Prim::F64,
+
+            (DW_ATE_unsigned, 0x10) => Prim::U128,
+            (DW_ATE_signed, 0x10) => Prim::I128,
+            (DW_ATE_float, 0x10) => Prim::F128,
+
+            _ => cu::bail!("unknown primitive type. encoding: {encoding}, byte size: {byte_size}"),
+        };
+
+        Ok(prim)
+    }
+
     /// Execute f on each direct child node (does not include the input node)
     pub fn for_each_child<F>(&self, f: F) -> cu::Result<()>
     where
@@ -394,7 +468,124 @@ impl ArcBuf {
 }
 impl Drop for ArcBuf {
     fn drop(&mut self) {
-        unsafe { Arc::from_raw(self.0); }
+        unsafe {
+            Arc::from_raw(self.0);
+        }
+    }
+}
+unsafe impl Send for ArcBuf {}
+unsafe impl Sync for ArcBuf {}
+
+pub fn is_type_tag(tag: Tag) -> bool {
+    match tag {
+        DW_TAG_structure_type
+        | DW_TAG_class_type
+        | DW_TAG_union_type
+        | DW_TAG_enumeration_type
+        // typedefs
+        | DW_TAG_unspecified_type
+        | DW_TAG_typedef
+        // pointer
+        | DW_TAG_pointer_type
+        | DW_TAG_reference_type
+        | DW_TAG_array_type
+        // qualifier
+        | DW_TAG_const_type
+        | DW_TAG_volatile_type
+        | DW_TAG_restrict_type
+        // function
+        | DW_TAG_subroutine_type
+        | DW_TAG_ptr_to_member_type
+        // base
+        | DW_TAG_base_type => true,
+
+        // this is to prevent constants above from being interpreted as variable ident
+        _tag => false
     }
 }
 
+// if something has size this big it's probably wrong, so it's fine to use
+// as special value
+pub const UNSIZED: u32 = u32::MAX;
+
+pub type GoffMap<T> = BTreeMap<Goff, T>;
+
+/// Local offset into a Compilation Unit in DWARF
+#[rustfmt::skip]
+#[derive(
+    DebugCustom, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord,
+    Into, Display
+)]
+#[display("local(0x{:08x})", self.0)]
+#[debug("local(0x{:08x})", self.0)]
+pub struct Loff(usize);
+
+impl From<gimli::UnitOffset<usize>> for Loff {
+    fn from(value: gimli::UnitOffset<usize>) -> Self {
+        Self(value.0)
+    }
+}
+
+impl From<Loff> for gimli::UnitOffset<usize> {
+    fn from(value: Loff) -> Self {
+        Self(value.0)
+    }
+}
+
+impl Loff {
+    /// Convert unit-local offset to global offset by adding the offset of the unit
+    #[inline(always)]
+    pub fn to_global(self, unit_offset: impl Into<usize>) -> Goff {
+        Goff(self.0 + unit_offset.into())
+    }
+}
+
+/// Global offset into DWARF
+#[rustfmt::skip]
+#[derive(
+    DebugCustom, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord,
+    From, Into, Display
+)]
+#[display("0x{:08x}", self.0)]
+#[debug("0x{:08x}", self.0)]
+pub struct Goff(usize);
+
+impl Goff {
+    /// Get a fabricated global offset for primitive types
+    pub const fn prim(p: Prim) -> Self {
+        let s = match p {
+            Prim::Void => 0x1FFFF0000,
+            Prim::Bool => 0x1FFFF0001,
+            Prim::U8 => 0x1FFFF0101,
+            Prim::U16 => 0x1FFFF0102,
+            Prim::U32 => 0x1FFFF0104,
+            Prim::U64 => 0x1FFFF0108,
+            Prim::U128 => 0x1FFFF0110,
+            Prim::I8 => 0x1FFFF0201,
+            Prim::I16 => 0x1FFFF0202,
+            Prim::I32 => 0x1FFFF0204,
+            Prim::I64 => 0x1FFFF0208,
+            Prim::I128 => 0x1FFFF0210,
+            Prim::F32 => 0x1FFFF0304,
+            Prim::F64 => 0x1FFFF0308,
+            Prim::F128 => 0x1FFFF0310,
+        };
+        Self(s)
+    }
+
+    pub const fn pointer() -> Self {
+        Self(0x2FFFF0000)
+    }
+
+    pub const fn ptmd() -> Self {
+        Self(0x2FFFF0001)
+    }
+
+    pub const fn ptmf() -> Self {
+        Self(0x2FFFF0002)
+    }
+
+    pub const fn is_prim(self) -> bool {
+        return self.0 >= 0x1FFFF0000;
+    }
+}

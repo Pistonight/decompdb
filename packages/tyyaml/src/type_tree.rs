@@ -8,7 +8,7 @@ pub enum Tree<Repr> {
     /// An array type
     ///
     /// TyYAML representation is `[ TYPE_ID,[LEN] ]`
-    Array(Box<Self>, usize),
+    Array(Box<Self>, u32),
     /// A pointer type
     ///
     /// TyYAML representation is `[ TYPE_ID,'*' ]`
@@ -36,7 +36,7 @@ impl<Repr> Tree<Repr> {
         Self::Ptr(Box::new(pointee.into()))
     }
     /// Create an array type
-    pub fn array(pointee: impl Into<Self>, len: usize) -> Self {
+    pub fn array(pointee: impl Into<Self>, len: u32) -> Self {
         Self::Array(Box::new(pointee.into()), len)
     }
     /// Create a pointer-to-member-data type
@@ -149,6 +149,61 @@ impl<Repr> Tree<Repr> {
                 }
                 Ok(())
             }
+        }
+    }
+}
+impl<Repr: std::fmt::Display> std::fmt::Display for Tree<Repr> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        return match self {
+            Self::Base(ty) => write!(f, "{ty}"),
+            Self::Array(ty, len) => write!(f, "{ty}[{len}]"),
+            Self::Ptr(ty) => {
+                if let Self::Sub(args) = ty.as_ref() {
+                    let mut iter = args.iter();
+                    let retty = iter
+                        .next()
+                        .expect("missing return type in pointer-to-subroutine type");
+                    write!(f, "{retty} (*)(")?;
+
+                    write_tyyaml_args(iter, f)?;
+                    write!(f, ")")
+                } else {
+                    write!(f, "{ty}*")
+                }
+            }
+            Self::Sub(args) => {
+                let mut iter = args.iter();
+                let retty = iter.next().expect("missing return type in subroutine type");
+                write!(f, "{retty}(")?;
+
+                write_tyyaml_args(iter, f)?;
+                write!(f, ")")
+            }
+            // note that this will not be the correct CPP type syntax
+            // if pointee is a pointer-to-subroutine type
+            Self::Ptmd(base, pointee) => write!(f, "{pointee} {base}::*"),
+            Self::Ptmf(base, args) => {
+                let mut iter = args.iter();
+                let retty = iter
+                    .next()
+                    .expect("missing return type in pointer-to-member-function type");
+                write!(f, "{retty} ({base}::*)(")?;
+
+                write_tyyaml_args(iter, f)?;
+                write!(f, ")")
+            }
+        };
+        fn write_tyyaml_args<'a, Repr: std::fmt::Display + 'a, I: Iterator<Item = &'a Tree<Repr>>>(
+            mut iter: I,
+            f: &mut std::fmt::Formatter<'_>,
+        ) -> std::fmt::Result {
+            if let Some(first) = iter.next() {
+                write!(f, "{first}")?;
+                for arg in iter {
+                    write!(f, ", {arg}")?;
+                }
+            }
+            Ok(())
         }
     }
 }

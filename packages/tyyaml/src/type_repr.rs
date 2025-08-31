@@ -84,61 +84,6 @@ impl Type {
         }
     }
 }
-impl std::fmt::Display for Type {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        return match self {
-            Self::Base(ty) => write!(f, "{ty}"),
-            Self::Array(ty, len) => write!(f, "{ty}[{len}]"),
-            Self::Ptr(ty) => {
-                if let Self::Sub(args) = ty.as_ref() {
-                    let mut iter = args.iter();
-                    let retty = iter
-                        .next()
-                        .expect("missing return type in pointer-to-subroutine type");
-                    write!(f, "{retty} (*)(")?;
-
-                    write_tyyaml_args(iter, f)?;
-                    write!(f, ")")
-                } else {
-                    write!(f, "{ty}*")
-                }
-            }
-            Self::Sub(args) => {
-                let mut iter = args.iter();
-                let retty = iter.next().expect("missing return type in subroutine type");
-                write!(f, "{retty}(")?;
-
-                write_tyyaml_args(iter, f)?;
-                write!(f, ")")
-            }
-            // note that this will not be the correct CPP type syntax
-            // if pointee is a pointer-to-subroutine type
-            Self::Ptmd(base, pointee) => write!(f, "{pointee} {base}::*"),
-            Self::Ptmf(base, args) => {
-                let mut iter = args.iter();
-                let retty = iter
-                    .next()
-                    .expect("missing return type in pointer-to-member-function type");
-                write!(f, "{retty} ({base}::*)(")?;
-
-                write_tyyaml_args(iter, f)?;
-                write!(f, ")")
-            }
-        };
-        fn write_tyyaml_args<'a, I: Iterator<Item = &'a Type>>(
-            mut iter: I,
-            f: &mut std::fmt::Formatter<'_>,
-        ) -> std::fmt::Result {
-            if let Some(first) = iter.next() {
-                write!(f, "{first}")?;
-                for arg in iter {
-                    write!(f, ", {arg}")?;
-                }
-            }
-            Ok(())
-        }
-    }
-}
 impl Serialize for Type {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeSeq as _;
@@ -214,7 +159,7 @@ impl<'de> Deserialize<'de> for Type {
         #[serde(untagged)]
         enum Spec<'a> {
             Str(&'a str),
-            Len([usize; 1]),
+            Len([u32; 1]),
         }
         impl Visitor {
             fn continue_visit<'de, A: serde::de::SeqAccess<'de>>(

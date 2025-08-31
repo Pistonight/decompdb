@@ -10,23 +10,20 @@ mod dwarf_parse;
 
 mod bucket;
 pub use bucket::*;
-mod dwarf_types;
-use dwarf_types::*;
 mod namespace;
 // pub use namespace::*;
 mod name_comparator;
 use name_comparator::*;
 
-mod type_compiler;
-mod type_loader;
-mod type_optimizer;
-mod type_linker;
-mod type_structure;
 mod type0_compiler;
+mod type_loader;
+// mod type_compiler;
+// mod type_optimizer;
+// mod type_linker;
+mod type_structure;
 
 mod pre {
     pub use super::dwarf_parse::*;
-    pub use super::dwarf_types::*;
     pub use super::namespace::Namespace;
     pub use gimli::constants::*;
 }
@@ -42,7 +39,7 @@ pub struct CmdExtract {
     pub common: cu::cli::Flags,
 }
 pub fn run(config: Config) -> cu::Result<()> {
-    cu::co::run(async move { 
+    cu::co::run(async move {
         // we will leak memory if panic, but otherwise this is safe
         // let bytes: Box<[u8]> = cu::fs::read(&config.paths.elf)?.into();
         // let bytes = Box::into_raw(bytes);
@@ -70,80 +67,46 @@ async fn run_internal(config: Config) -> cu::Result<()> {
     let mut units = Vec::new();
     let mut iter = Dwarf::iter_units(&dwarf);
     while let Some(unit) = iter.next_unit().context("error while collecting units from DWARF")? {
-        units.push(Arc::new(unit));
+        units.push(unit);
     }
 
     cu::info!("found {} compilation units", units.len());
 
-    // let mut compilers = {
-    //     let bar = cu::progress_bar(units.len(), "compiling types");
-    //     let mut handles = Vec::with_capacity(units.len());
-    //     let pool = cu::co::pool(-1);
-    //
-    //     for unit in &units {
-    //         let unit = Arc::clone(unit);
-    //         let extract_config = Arc::clone(&extract_config);
-    //         let handle = pool.spawn(async move {
-    //             let ns = unit.load_namespaces()?;
-    //             let types = unit.load_types(Arc::clone(&extract_config), ns)?;
-    //             cu::debug!("type count: {}", types.len());
-    //
-    //             let name = unit.name.to_string();
-    //             let compiler = type_compiler::compile_types(
-    //                 name.clone(),
-    //                 types, 
-    //                 extract_config
-    //             )?;
-    //             cu::Ok((compiler, name))
-    //         });
-    //         handles.push(handle);
-    //     }
-    //
-    //     let mut set = cu::co::set(handles);
-    //     let mut compilers = Vec::with_capacity(units.len());
-    //     let mut num_enums = 0;
-    //     let mut num_unions = 0;
-    //     let mut num_structs = 0;
-    //     let mut num_enum_decls = 0;
-    //     let mut num_union_decls = 0;
-    //     let mut num_struct_decls = 0;
-    //     let mut count = 0;
-    //     while let Some(compiler) = set.next().await {
-    //         let (compiler, name) = compiler??;
-    //         count += 1;
-    //         for bucket in compiler.compiled.buckets() {
-    //             // type_count += 1;
-    //             let Some(data) = &bucket.value.data else {
-    //                 continue;
-    //             };
-    //             match data {
-    //                 type_compiler::TypeUnitData::Prim(_) => {}
-    //                 type_compiler::TypeUnitData::Enum(_) => num_enums += 1,
-    //                 type_compiler::TypeUnitData::EnumDecl => num_enum_decls += 1,
-    //                 type_compiler::TypeUnitData::Union(_) => num_unions += 1,
-    //                 type_compiler::TypeUnitData::UnionDecl => num_union_decls += 1,
-    //                 type_compiler::TypeUnitData::Struct(_) => num_structs += 1,
-    //                 type_compiler::TypeUnitData::StructDecl => num_struct_decls += 1,
-    //                 type_compiler::TypeUnitData::Tree(_) => {}
-    //             }
-    //         }
-    //         // cu::progress!(&bar, count, "[{num_enums} enums ({num_enum_decls} decl), {num_unions} unions ({num_union_decls} decl), {num_structs} structs ({num_struct_decls} decl)] {name}");
-    //         cu::progress!(&bar, count, "{name}");
-    //         compilers.push(compiler);
-    //     }
-    //
-    //
-    //
-    //
-    //
-    //
-    //
-    //
-    //
-    //     cu::info!("found {num_enums} enums, {num_unions} unions, {num_structs} structs");
-    //     cu::info!("found {num_enum_decls} enum decls, {num_union_decls} union decls, {num_struct_decls} struct decls");
-    //     compilers
-    // };
+    let mut stage1s = {
+        let bar = cu::progress_bar(units.len(), "loading types");
+        let mut handles = Vec::with_capacity(units.len());
+        let pool = cu::co::pool(-1);
+        let mut stage1s = Vec::with_capacity(units.len());
+
+        for unit in units {
+            // let unit = Arc::clone(unit);
+            let config = Arc::clone(&config);
+            let handle = pool.spawn(async move {
+                let ns = namespace::load_namespaces(&unit)?;
+                let stage0 = type_loader::load_types(&unit, config, ns)?;
+                let stage1 = cu::check!(
+                    type0_compiler::compile_stage0(stage0),
+                    "failed to compile stage0 for {unit}"
+                )?;
+                cu::Ok(stage1)
+            });
+            handles.push(handle);
+        }
+
+        let mut set = cu::co::set(handles);
+        let mut count = 0;
+        let mut type_count = 0;
+        while let Some(result) = set.next().await {
+            let stage1 = result??;
+            count += 1;
+            type_count += stage1.types.len();
+            cu::progress!(&bar, count, "{}", stage1.name);
+            stage1s.push(stage1);
+        }
+        drop(bar);
+        cu::info!("stage1: loaded {type_count} types");
+        stage1s
+    };
     //
     // compilers.sort_by(|a, b| a.name.cmp(&b.name));
 
@@ -157,12 +120,10 @@ async fn run_internal(config: Config) -> cu::Result<()> {
     //     (k, &linked_types.compiled.get_unwrap(k).unwrap().value)
     // }).collect::<Vec<_>>();
 
-
     // cu::info!("ENUMS{enums:#?}");
     // cu::info!("UNIONS{unions:#?}");
 
     // let unit = units.iter().find(|x| x.name.contains("PauseMenuDataMgr")).unwrap();
-
 
     // cu::trace!("types: {types:#?}");
 
