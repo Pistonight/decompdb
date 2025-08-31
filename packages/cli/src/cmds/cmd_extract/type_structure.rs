@@ -8,10 +8,13 @@ use crate::config::Config;
 use super::bucket::{GoffBuckets, MergeQueue};
 use super::pre::*;
 
+pub struct TypeStage2 {
+    pub types: GoffMap<Type1>,
+}
+
 pub struct TypeStage1 {
     pub offset: usize,
     pub name: String,
-    pub buckets: GoffBuckets,
     pub types: GoffMap<Type1>,
 }
 
@@ -83,6 +86,24 @@ pub struct Type1Enum {
     /// Enumerators of the enum, in the order they appear in DWARF
     pub enumerators: Vec<Enumerator>,
 }
+impl Type1Enum {
+    pub fn merge_from(&mut self, other: &Self) -> cu::Result<()> {
+        cu::ensure!(
+            self.byte_size == other.byte_size,
+            "cannot merge 2 enums of different byte size: 0x{:x} != 0x{:x}",
+            self.byte_size,
+            other.byte_size
+        );
+        // we don't have any "partial definitions" for enums observed yet
+        cu::ensure!(
+            self.enumerators == other.enumerators,
+            "cannot merge 2 enums of different enumerators: {:#?}, and {:#?}",
+            self.enumerators,
+            other.enumerators
+        );
+        Ok(())
+    }
+}
 
 pub struct TypeStage0 {
     pub offset: usize,
@@ -145,6 +166,29 @@ pub struct Type0Union {
 
 impl Type0Union {
     pub fn merge_checked(&self, other: &Self, merges: &mut MergeQueue) -> cu::Result<()> {
+        self.check_merge_precondition(other)?;
+        let mut mq = MergeQueue::default();
+        for (a, b) in std::iter::zip(&self.members, &other.members) {
+            cu::check!(a.merge_checked(b, &mut mq), "cannot merge union member")?;
+        }
+        merges.extend(mq)?;
+        Ok(())
+    }
+    pub fn merge_from(&mut self, other: &mut Self) -> cu::Result<()> {
+        self.check_merge_precondition(other)?;
+        // we don't have any "partial definitions" for unions observed yet
+        for (a, b) in std::iter::zip(&self.members, &other.members) {
+            cu::ensure!(
+                a.name == b.name,
+                "cannot merge 2 unions of different member names: {:?} and {:?}",
+                a.name,
+                b.name
+            );
+        }
+        Ok(())
+    }
+
+    fn check_merge_precondition(&self, other: &Self) -> cu::Result<()> {
         cu::ensure!(
             self.byte_size == other.byte_size,
             "union byte sizes are not equal: 0x{:x} != 0x{:x}",
@@ -157,11 +201,6 @@ impl Type0Union {
             self.members.len(),
             other.members.len()
         );
-        let mut mq = MergeQueue::default();
-        for (a, b) in std::iter::zip(&self.members, &other.members) {
-            cu::check!(a.merge_checked(b, &mut mq), "cannot merge union member")?;
-        }
-        merges.extend(mq);
         Ok(())
     }
 }
@@ -179,18 +218,7 @@ pub struct Type0Struct {
 
 impl Type0Struct {
     pub fn merge_checked(&self, other: &Self, merges: &mut MergeQueue) -> cu::Result<()> {
-        cu::ensure!(
-            self.byte_size == other.byte_size,
-            "struct byte sizes are not equal: 0x{:x} != 0x{:x}",
-            self.byte_size,
-            other.byte_size
-        );
-        cu::ensure!(
-            self.members.len() == other.members.len(),
-            "struct member counts are not equal: {} != {}",
-            self.members.len(),
-            other.members.len()
-        );
+        self.check_merge_precondition(other)?;
         let mut mq = MergeQueue::default();
         // for vtable, we might not have the full vtable at this point yet,
         // so we can only check if there are any existing conflicts
@@ -215,7 +243,81 @@ impl Type0Struct {
         for (a, b) in std::iter::zip(&self.members, &other.members) {
             cu::check!(a.merge_checked(b, &mut mq), "cannot merge struct member")?;
         }
-        merges.extend(mq);
+        merges.extend(mq)?;
+        Ok(())
+    }
+
+    pub fn merge_from(&mut self, other: &mut Self) -> cu::Result<()> {
+        self.check_merge_precondition(other)?;
+        // we don't have any "partial definitions" for structs observed yet
+        for (a, b) in std::iter::zip(&self.members, &other.members) {
+            cu::ensure!(
+                a.name == b.name,
+                "cannot merge 2 structs of different member names: {:?} and {:?}",
+                a.name,
+                b.name
+            );
+            cu::ensure!(
+                a.offset == b.offset,
+                "cannot merge 2 structs of different member offsets: {:?} and {:?}",
+                a.offset,
+                b.offset
+            );
+            cu::ensure!(
+                a.special == b.special,
+                "cannot merge 2 structs of different member specials: {:?} and {:?}",
+                a.special,
+                b.special
+            );
+        }
+
+        // merge vtables
+        // clone so if error, we don't change anything
+        let mut new_vtable = self.vtable.clone();
+        for (i, other_entry) in &other.vtable {
+            if other_entry.is_dtor() {
+                if let Some((_, self_entry)) = self.vtable.iter().find(|(_, e)| e.is_dtor()) {
+                    cu::ensure!(
+                        other_entry.name == self_entry.name,
+                        "cannot merge vtable dtor entries of different names: {:?} and {:?}",
+                        other_entry.name,
+                        self_entry.name
+                    );
+                } else {
+                    new_vtable.push((*i, other_entry.clone()));
+                }
+                continue;
+            }
+            if let Some((_, self_entry)) = self.vtable.iter().find(|(j, _)| i == j) {
+                cu::ensure!(
+                    other_entry.name == self_entry.name,
+                    "cannot merge vtable entries of different names, at index {i}: {:?} and {:?}",
+                    other_entry.name,
+                    self_entry.name
+                );
+            } else {
+                new_vtable.push((*i, other_entry.clone()));
+            }
+        }
+        new_vtable.sort_by_key(|x| x.0);
+        self.vtable = new_vtable;
+
+        Ok(())
+    }
+
+    fn check_merge_precondition(&self, other: &Self) -> cu::Result<()> {
+        cu::ensure!(
+            self.byte_size == other.byte_size,
+            "struct byte sizes are not equal: 0x{:x} != 0x{:x}",
+            self.byte_size,
+            other.byte_size
+        );
+        cu::ensure!(
+            self.members.len() == other.members.len(),
+            "struct member counts are not equal: {} != {}",
+            self.members.len(),
+            other.members.len()
+        );
         Ok(())
     }
 }
@@ -259,7 +361,7 @@ impl Type0Member {
             self.special,
             other.special
         );
-        merges.push(self.ty, other.ty);
+        merges.push(self.ty, other.ty)?;
         Ok(())
     }
 }
@@ -306,7 +408,7 @@ impl VtableEntry {
                 "cannot merge vtable entry subroutine arg/ret type"
             )?;
         }
-        merges.extend(mq);
+        merges.extend(mq)?;
         Ok(())
     }
 }
@@ -321,7 +423,7 @@ pub enum SpecialMember {
 pub fn tree_merge_checked(a: &Tree<Goff>, b: &Tree<Goff>, merges: &mut MergeQueue) -> cu::Result<()> {
     match (a, b) {
         (Tree::Base(a), Tree::Base(b)) => {
-            merges.push(*a, *b);
+            merges.push(*a, *b)?;
             Ok(())
         }
         (Tree::Array(a, a_len), Tree::Array(b, b_len)) => {
@@ -340,15 +442,15 @@ pub fn tree_merge_checked(a: &Tree<Goff>, b: &Tree<Goff>, merges: &mut MergeQueu
                     "cannot merge subroutine arg/ret type"
                 )?;
             }
-            merges.extend(mq);
+            merges.extend(mq)?;
             Ok(())
         }
         (Tree::Ptmd(a, a_inner), Tree::Ptmd(b, b_inner)) => {
             cu::check!(
                 tree_merge_checked(a_inner, b_inner, merges),
                 "cannot merge ptmd pointee types"
-            );
-            merges.push(*a, *b);
+            )?;
+            merges.push(*a, *b)?;
             Ok(())
         }
         (Tree::Ptmf(a, a_args), Tree::Ptmf(b, b_args)) => {
@@ -360,12 +462,12 @@ pub fn tree_merge_checked(a: &Tree<Goff>, b: &Tree<Goff>, merges: &mut MergeQueu
                     "cannot merge ptmf subroutine arg/ret type"
                 )?;
             }
-            merges.extend(mq);
-            merges.push(*a, *b);
+            merges.extend(mq)?;
+            merges.push(*a, *b)?;
             Ok(())
         }
         (a, b) => {
-            cu::bail!("cannot merge type trees of different shapes: {a:?}, and {b:?}");
+            cu::bail!("cannot merge type trees of different shapes: {a:#?}, and {b:#?}");
         }
     }
 }

@@ -72,8 +72,8 @@ async fn run_internal(config: Config) -> cu::Result<()> {
 
     cu::info!("found {} compilation units", units.len());
 
-    let mut stage1s = {
-        let bar = cu::progress_bar(units.len(), "loading types");
+    let stage1 = {
+        let bar = cu::progress_bar(units.len(), "stage0 -> stage1: loading and compiling types");
         let mut handles = Vec::with_capacity(units.len());
         let pool = cu::co::pool(-1);
         let mut stage1s = Vec::with_capacity(units.len());
@@ -103,12 +103,29 @@ async fn run_internal(config: Config) -> cu::Result<()> {
             cu::progress!(&bar, count, "{}", stage1.name);
             stage1s.push(stage1);
         }
+        cu::progress_done!(&bar, "stage1: loaded {type_count} types");
         drop(bar);
-        cu::info!("stage1: loaded {type_count} types");
-        stage1s.sort_by(|a, b| a.name.cmp(&b.name));
+        stage1s.sort_unstable_by_key(|x| x.offset);
         stage1s
     };
-    //
+
+    let stage2 = {
+        let len = stage1.len();
+        let mut iter = stage1.into_iter();
+        let stage2 = cu::check!(iter.next(), "no compilation units to link!!!")?;
+        let mut stage2 = type0_compiler::into_stage2(stage2);
+
+        let bar = cu::progress_bar(len, "stage1 -> stage2: linking types across units");
+        for (i, stage1) in iter.enumerate() {
+            let name = stage1.name.clone();
+            stage2 = cu::check!(
+                type0_compiler::link_stage1(stage2, stage1),
+                "failed to link types with {name}"
+            )?;
+            cu::progress!(&bar, i + 1, "{name}");
+        }
+        stage2
+    };
 
     // let linked_types = type_linker::link_types(compilers).await.context("type linking failed")?;
     //

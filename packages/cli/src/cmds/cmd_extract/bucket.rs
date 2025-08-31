@@ -461,16 +461,11 @@ impl MergeQueue {
         Ok(())
     }
 }
-// impl IntoIterator for MergeQueue {
-//     type Item = (Goff, Goff);
-//     type IntoIter = std::vec::IntoIter<(Goff, Goff)>;
-//
-//     fn into_iter(self) -> Self::IntoIter {
-//         self.0.into_iter()
-//     }
-// }
 
-fn pick_bucket_primary_key(k1: Goff, k2: Goff) -> cu::Result<(Goff, Goff)> {
+pub fn pick_bucket_primary_key(k1: Goff, k2: Goff) -> cu::Result<(Goff, Goff)> {
+    if k1 == k2 {
+        return Ok((k1, k2));
+    }
     match (k1.is_prim(), k2.is_prim()) {
         (true, true) => cu::bail!("cannot have 2 different primitive goffs in the same bucket: {k1} and {k2}"),
         (true, false) => Ok((k1, k2)),
