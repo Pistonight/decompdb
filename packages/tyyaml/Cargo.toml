@@ -7,4 +7,4 @@ license = "MIT"
 
 [dependencies]
 cu = { workspace = true, features = ["yaml"] }
-serde = "1"
+serde.workspace = true

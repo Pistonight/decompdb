@@ -1,0 +1,181 @@
+[
+  {
+    "id": "0x555b88f95910",
+    "kind": "TypedefDecl",
+    "loc": {
+      "offset": 502,
+      "file": "test.cpp",
+      "line": 16,
+      "col": 5,
+      "tokLen": 19
+    },
+    "range": {
+      "begin": {
+        "offset": 384,
+        "line": 14,
+        "col": 5,
+        "tokLen": 7
+      },
+      "end": {
+        "offset": 502,
+        "line": 16,
+        "col": 5,
+        "tokLen": 19
+      }
+    },
+    "name": "____dejj_type_parse",
+    "type": {
+      "desugaredQualType": "std::aligned_storage<32, 8>::type",
+      "qualType": "std::__1::aligned_storage_t<32UL, alignof(sead::IDelegate1<const sead::InfLoopChecker::InfLoopParam &>)>"
+    },
+    "inner": [
+      {
+        "id": "0x555b88f95870",
+        "kind": "ElaboratedType",
+        "type": {
+          "qualType": "std::__1::aligned_storage_t<32UL, alignof(sead::IDelegate1<const sead::InfLoopChecker::InfLoopParam &>)>"
+        },
+        "qualifier": "std::__1::",
+        "inner": [
+          {
+            "id": "0x555b88f95800",
+            "kind": "TemplateSpecializationType",
+            "type": {
+              "qualType": "aligned_storage_t<32UL, alignof(sead::IDelegate1<const sead::InfLoopChecker::InfLoopParam &>)>"
+            },
+            "isAlias": true,
+            "templateName": "std::__1::aligned_storage_t",
+            "inner": [
+              {
+                "kind": "TemplateArgument",
+                "isExpr": true,
+                "inner": [
+                  {
+                    "id": "0x555b88f95590",
+                    "kind": "ConstantExpr",
+                    "range": {
+                      "begin": {
+                        "offset": 421,
+                        "line": 15,
+                        "col": 29,
+                        "tokLen": 4
+                      },
+                      "end": {
+                        "offset": 421,
+                        "col": 29,
+                        "tokLen": 4
+                      }
+                    },
+                    "type": {
+                      "qualType": "unsigned long"
+                    },
+                    "valueCategory": "prvalue",
+                    "value": "32",
+                    "inner": [
+                      {
+                        "id": "0x555b88f95348",
+                        "kind": "IntegerLiteral",
+                        "range": {
+                          "begin": {
+                            "offset": 421,
+                            "col": 29,
+                            "tokLen": 4
+                          },
+                          "end": {
+                            "offset": 421,
+                            "col": 29,
+                            "tokLen": 4
+                          }
+                        },
+                        "type": {
+                          "qualType": "unsigned long"
+                        },
+                        "valueCategory": "prvalue",
+                        "value": "32"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "kind": "TemplateArgument",
+                "isExpr": true,
+                "inner": [
+                  {
+                    "id": "0x555b88f955b0",
+                    "kind": "ConstantExpr",
+                    "range": {
+                      "begin": {
+                        "offset": 427,
+                        "col": 35,
+                        "tokLen": 7
+                      },
+                      "end": {
+                        "offset": 495,
+                        "col": 103,
+                        "tokLen": 1
+                      }
+                    },
+                    "type": {
+                      "qualType": "unsigned long"
+                    },
+                    "valueCategory": "prvalue",
+                    "value": "8",
+                    "inner": [
+                      {
+                        "id": "0x555b88f95558",
+                        "kind": "UnaryExprOrTypeTraitExpr",
+                        "range": {
+                          "begin": {
+                            "offset": 427,
+                            "col": 35,
+                            "tokLen": 7
+                          },
+                          "end": {
+                            "offset": 495,
+                            "col": 103,
+                            "tokLen": 1
+                          }
+                        },
+                        "type": {
+                          "qualType": "unsigned long"
+                        },
+                        "valueCategory": "prvalue",
+                        "name": "alignof",
+                        "argType": {
+                          "qualType": "sead::IDelegate1<const sead::InfLoopChecker::InfLoopParam &>"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "id": "0x555b88f957b0",
+                "kind": "ElaboratedType",
+                "type": {
+                  "qualType": "typename aligned_storage<32UL, 8UL>::type"
+                },
+                "qualifier": "aligned_storage<32, 8>::",
+                "inner": [
+                  {
+                    "id": "0x555b87c40010",
+                    "kind": "RecordType",
+                    "type": {
+                      "qualType": "std::aligned_storage<32, 8>::type"
+                    },
+                    "decl": {
+                      "id": "0x555b87c3ff78",
+                      "kind": "CXXRecordDecl",
+                      "name": "type"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]

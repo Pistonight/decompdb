@@ -1,5 +1,6 @@
 [workspace]
-members = [ "packages/cli",
+members = [ 
+    "packages/cli",
     "packages/tyyaml"
 ]
 resolver = "2"
@@ -8,4 +9,8 @@ resolver = "2"
 package = "pistonite-cu"
 version = "0.5.1"
 path = "../cu/packages/copper"
+
+[workspace.dependencies]
+fxhash = "0.2.1"
+serde = "1"
 

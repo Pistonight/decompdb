@@ -8,6 +8,7 @@ use crate::config::Config;
 use super::pre::*;
 use super::type_structure::*;
 
+/// Load the type data from DWARF units
 pub fn load_types(unit: &Unit, config: Arc<Config>, namespaces: GoffMap<Namespace>) -> cu::Result<TypeStage0> {
     let pointer_type = config.extract.pointer_type()?;
     let mut ctx = LoadTypeCtx {
@@ -72,6 +73,11 @@ fn load_type_at<'a, 'b>(node: DieNode<'a, 'b>, ctx: &mut LoadTypeCtx) -> cu::Res
                         entry.namespaced_name(&ctx.namespaces),
                         "failed to read name of the typedef at {offset}"
                     )?;
+                    // typedef name shouldn't be templated
+                    cu::ensure!(
+                        !typedef_name.contains('<'),
+                        "unexpected templated typedef name at {offset}"
+                    );
                     Type0::Typedef(typedef_name, entry.to_global(loff))
                 }
             }
@@ -84,7 +90,7 @@ fn load_type_at<'a, 'b>(node: DieNode<'a, 'b>, ctx: &mut LoadTypeCtx) -> cu::Res
                 Some(loff) => make_ptr(entry.to_global(loff)),
             }
         }
-        // modifiers that don't do anything..
+        // modifiers that don't affect the type
         DW_TAG_const_type | DW_TAG_volatile_type | DW_TAG_restrict_type => {
             match cu::check!(entry.loff_opt(DW_AT_type), "failed to read alias type at {offset}")? {
                 None => Type0::Prim(Prim::Void),
@@ -262,6 +268,11 @@ fn load_union_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu:
         entry.namespaced_name_opt(&ctx.namespaces),
         "failed to get union name at {offset}"
     )?;
+    // remove the templates from the name
+    let name = name.map(|x| match x.find('<') {
+        None => x,
+        Some(i) => x[..i].to_string(),
+    });
     let is_decl = cu::check!(
         entry.flag(DW_AT_declaration),
         "failed to check if union is declaration at {offset}"
@@ -277,6 +288,7 @@ fn load_union_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu:
     }
     let byte_size = byte_size as u32;
 
+    let mut template_args = Vec::new();
     let mut members = Vec::<Type0Member>::with_capacity(16);
     entry.for_each_child(|child| {
         let entry = child.entry();
@@ -306,15 +318,20 @@ fn load_union_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu:
                     }
                 }
             }
+            // template args
+            // template args
+            DW_TAG_template_type_parameter | DW_TAG_template_value_parameter | DW_TAG_GNU_template_parameter_pack => {
+                cu::check!(
+                    load_template_type_parameter(&entry, &mut template_args),
+                    "failed to load template parameter for union at {offset}"
+                )?;
+            }
             DW_TAG_structure_type
             | DW_TAG_class_type
             | DW_TAG_union_type
             | DW_TAG_enumeration_type
-            | DW_TAG_typedef
-            | DW_TAG_template_type_parameter
-            | DW_TAG_template_value_parameter
-            | DW_TAG_GNU_template_parameter_pack => {
-                // ignore subtypes
+            | DW_TAG_typedef => {
+                // ignore subtypes, since they will be recursed into later
             }
             DW_TAG_subprogram => {
                 // unions can't be virtual for now
@@ -330,7 +347,14 @@ fn load_union_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu:
         Ok(())
     })?;
 
-    Ok(Type0::Union(name, Type0Union { byte_size, members }))
+    Ok(Type0::Union(
+        name,
+        Type0Union {
+            template_args,
+            byte_size,
+            members,
+        },
+    ))
 }
 
 fn load_struct_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu::Result<Type0> {
@@ -339,6 +363,11 @@ fn load_struct_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu
         entry.namespaced_name_opt(&ctx.namespaces),
         "failed to get struct name at {offset}"
     )?;
+    // remove the templates from the name
+    let name = name.map(|x| match x.find('<') {
+        None => x,
+        Some(i) => x[..i].to_string(),
+    });
     let is_decl = cu::check!(
         entry.flag(DW_AT_declaration),
         "failed to check if struct is declaration at {offset}"
@@ -358,6 +387,7 @@ fn load_struct_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu
     let byte_size = byte_size as u32;
 
     let mut vtable = Vec::default();
+    let mut template_args = Vec::new();
     let mut members = Vec::<Type0Member>::with_capacity(16);
 
     let result = entry.for_each_child(|child| {
@@ -479,15 +509,19 @@ fn load_struct_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu
                 )?;
                 vtable.push((velem, VtableEntry { name, function_types }));
             }
+            // template args
+            DW_TAG_template_type_parameter | DW_TAG_template_value_parameter | DW_TAG_GNU_template_parameter_pack => {
+                cu::check!(
+                    load_template_type_parameter(&entry, &mut template_args),
+                    "failed to load template parameter for struct at {offset}"
+                )?;
+            }
             DW_TAG_structure_type
             | DW_TAG_class_type
             | DW_TAG_union_type
             | DW_TAG_enumeration_type
-            | DW_TAG_typedef
-            | DW_TAG_template_type_parameter
-            | DW_TAG_template_value_parameter
-            | DW_TAG_GNU_template_parameter_pack => {
-                // ignore subtypes
+            | DW_TAG_typedef => {
+                // ignore subtypes, since they will be recursed into later
             }
             tag => cu::bail!("unexpected tag {tag} at {offset}"),
         }
@@ -526,11 +560,59 @@ fn load_struct_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu
     Ok(Type0::Struct(
         name,
         Type0Struct {
+            template_args,
             byte_size,
             members,
             vtable,
         },
     ))
+}
+
+/// Load template type parameters into the output vec
+///
+/// The entry should be one of:
+/// - DW_TAG_template_type_parameter,
+/// - DW_TAG_template_value_parameter
+/// - DW_TAG_GNU_template_parameter_pack
+fn load_template_type_parameter(entry: &Die<'_, '_>, out: &mut Vec<TemplateArg>) -> cu::Result<()> {
+    match entry.tag() {
+        DW_TAG_template_type_parameter => {
+            let type_loff = cu::check!(
+                entry.loff_opt(DW_AT_type),
+                "failed to get template type parameter at {}",
+                entry.goff()
+            )?;
+            let type_goff = match type_loff {
+                Some(l) => entry.to_global(l),
+                None => Goff::prim(Prim::Void),
+            };
+            out.push(TemplateArg::Type(type_goff));
+        }
+        DW_TAG_template_value_parameter => {
+            let value = cu::check!(
+                entry.int(DW_AT_const_value),
+                "failed to get template value paramter at {}",
+                entry.goff()
+            )?;
+            out.push(TemplateArg::Const(value));
+        }
+        DW_TAG_GNU_template_parameter_pack => {
+            let result = entry.for_each_child(|child| {
+                let entry = child.entry();
+                load_template_type_parameter(&entry, out)
+            });
+            cu::check!(
+                result,
+                "failed to process GNU template parameter pack at {}",
+                entry.goff()
+            )?;
+        }
+        tag => cu::bail!(
+            "unexpected tag {tag} while processing template type parameter at {}",
+            entry.goff()
+        ),
+    }
+    Ok(())
 }
 
 /// Assert the entry is DW_TAG_array_type, and get the DW_AT_count of the DW_TAG_subrange_type

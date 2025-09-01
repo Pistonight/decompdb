@@ -18,7 +18,11 @@ pub fn load(path: impl AsRef<Path>) -> cu::Result<Config> {
     let base = path.parent_abs()?;
     let base_rel = base.try_to_rel();
     resolve_path(&base_rel, &mut config.paths.elf);
-    resolve_path(&base_rel, &mut config.paths.extract);
+    resolve_path(&base_rel, &mut config.paths.extract_output);
+    resolve_path(&base_rel, &mut config.paths.compdb);
+    config.paths.system_header_paths.iter_mut().for_each(|x| {
+        resolve_path(&base_rel, x);
+    });
     resolve_path(&base_rel, &mut config.paths.functions_csv.path);
     resolve_path(&base_rel, &mut config.paths.data_csv.path);
 
@@ -113,10 +117,18 @@ impl CfgExtract {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct CfgPaths {
-    /// Path for the ELF file for extract.
+    /// Path to the ELF file for extract.
     pub elf: PathBuf,
-    /// Path for the output directory for the extract command.
-    pub extract: PathBuf,
+    /// Path to the output directory for the extract command.
+    pub extract_output: PathBuf,
+    /// Path to the compile_commands.json
+    pub compdb: PathBuf,
+    /// Path to include the system headers used by compile commands in compdb.
+    ///
+    /// This is needed since we need to use a newer clang with the -ast-dump=json
+    /// option.
+    pub system_header_paths: Vec<PathBuf>,
+
     /// Configuration for the functions CSV file
     ///
     /// **This is deprecated and the format for symbol listing will change in the future**

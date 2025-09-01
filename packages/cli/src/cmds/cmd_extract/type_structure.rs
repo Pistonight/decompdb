@@ -9,24 +9,24 @@ use super::bucket::{GoffBuckets, MergeQueue};
 use super::pre::*;
 
 pub struct TypeStage2 {
-    pub types: GoffMap<Type1>,
+    pub types: GoffMap<TypeA>,
 }
 
-pub struct TypeStage1 {
+pub struct TypeStageA {
     pub offset: usize,
     pub name: String,
-    pub types: GoffMap<Type1>,
+    pub types: GoffMap<TypeA>,
 }
 
 /// "pieced-together" type info from raw types within a compilation unit
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Type1 {
+pub enum TypeA {
     /// Pritimive type
     Prim(Prim),
     /// Typedef <other> name; Other is global offset in debug info
     Typedef(String, Goff),
     /// Enum, could be anonymous
-    Enum(Option<String>, Type1Enum),
+    Enum(Option<String>, TypeAEnum),
     /// Declaration of an enum
     EnumDecl(String),
     /// Union, could be anonymous
@@ -41,22 +41,22 @@ pub enum Type1 {
     /// a TyTree::Base on the first level in stage 1
     Tree(Tree<Goff>),
 }
-impl Type1 {
+impl TypeA {
     pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
         match self {
-            Type1::Prim(_) => {}
-            Type1::Typedef(_, goff) => {
+            TypeA::Prim(_) => {}
+            TypeA::Typedef(_, goff) => {
                 *goff = cu::check!(f(*goff), "failed to map typedef goff {goff}")?;
             }
-            Type1::Enum(_, _) => {}
-            Type1::EnumDecl(_) => {}
-            Type1::Union(_, data) => {
+            TypeA::Enum(_, _) => {}
+            TypeA::EnumDecl(_) => {}
+            TypeA::Union(_, data) => {
                 for m in &mut data.members {
                     cu::check!(m.map_goff(&f), "failed to map union members")?;
                 }
             }
-            Type1::UnionDecl(_) => {}
-            Type1::Struct(_, data) => {
+            TypeA::UnionDecl(_) => {}
+            TypeA::Struct(_, data) => {
                 for m in &mut data.members {
                     cu::check!(m.map_goff(&f), "failed to map struct members")?;
                 }
@@ -64,8 +64,8 @@ impl Type1 {
                     cu::check!(e.map_goff(&f), "failed to map struct vtable entry")?;
                 }
             }
-            Type1::StructDecl(_) => {}
-            Type1::Tree(tree) => {
+            TypeA::StructDecl(_) => {}
+            TypeA::Tree(tree) => {
                 cu::check!(
                     tree.for_each_mut(|r| {
                         *r = f(*r)?;
@@ -80,13 +80,13 @@ impl Type1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Type1Enum {
+pub struct TypeAEnum {
     /// Base type, used to determine the size
     pub byte_size: u32,
     /// Enumerators of the enum, in the order they appear in DWARF
     pub enumerators: Vec<Enumerator>,
 }
-impl Type1Enum {
+impl TypeAEnum {
     pub fn merge_from(&mut self, other: &Self) -> cu::Result<()> {
         cu::ensure!(
             self.byte_size == other.byte_size,
@@ -119,15 +119,15 @@ pub enum Type0 {
     Prim(Prim),
     /// Typedef <other> name; Other is offset in debug info
     Typedef(String, Goff),
-    /// Enum, could be anonymous
+    /// Enum. The name does not include template args. could be anonymous
     Enum(Option<String>, Type0Enum),
     /// Declaration of an enum
     EnumDecl(String),
-    /// Union, could be anonymous
+    /// Union. The name does not include template args. could be anonymous
     Union(Option<String>, Type0Union),
     /// Declaration of union
     UnionDecl(String),
-    /// Struct or Class, could be anonymous
+    /// Struct or Class. The name does not include template args. could be anonymous
     Struct(Option<String>, Type0Struct),
     /// Declaration of struct or class
     StructDecl(String),
@@ -158,6 +158,8 @@ pub struct Enumerator {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Type0Union {
+    /// Template arguments, if any
+    pub template_args: Vec<TemplateArg>,
     /// Byte size of the union (should be size of the largest member)
     pub byte_size: u32,
     /// Union members. The members must have offset of 0 and special of None
@@ -207,6 +209,8 @@ impl Type0Union {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Type0Struct {
+    /// Template specialization of the struct, if any
+    pub template_args: Vec<TemplateArg>,
     /// Byte size of the struct
     pub byte_size: u32,
     /// Vtable of the struct. (index, entry).
@@ -419,6 +423,22 @@ pub enum SpecialMember {
     Vfptr,
     Bitfield(u32), // byte_size
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TemplateArg {
+    Const(i64),
+    Type(Goff),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Name<T> {
+    /// The untemplated base name (with namespace)
+    pub base: Arc<str>,
+    /// The template types
+    pub templates: Vec<T>,
+}
+
+// pub fn parse_templated_name(name: &str) -> cu::Result<
 
 pub fn tree_merge_checked(a: &Tree<Goff>, b: &Tree<Goff>, merges: &mut MergeQueue) -> cu::Result<()> {
     match (a, b) {

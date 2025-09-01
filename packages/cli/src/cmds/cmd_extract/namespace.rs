@@ -10,7 +10,7 @@ use super::pre::*;
 /// Load the namespaces in this compilation unit as a global offset map
 pub fn load_namespaces(unit: &Unit) -> cu::Result<GoffMap<Namespace>> {
     cu::debug!("loading namespaces for {unit}");
-    let mut namespace = NamespaceStack::new();
+    let mut namespace = NamespaceStack::default();
     let mut offset_to_ns = GoffMap::new();
     cu::check!(
         load_namespaces_root(unit, &mut namespace, &mut offset_to_ns),
@@ -37,10 +37,50 @@ fn read_namespace_recur(
     offset_to_ns: &mut GoffMap<Namespace>,
 ) -> cu::Result<()> {
     let entry = node.entry();
+    let offset = entry.goff();
     let tag = entry.tag();
+    if is_type_tag(tag) {
+        // types could be defined inside a type
+        offset_to_ns.insert(offset, namespace.curr());
+        namespace.push(NamespaceSegment::Type(offset));
+    } else {
+        match tag {
+            // simply recurse
+            DW_TAG_variable | DW_TAG_compile_unit => {
+                node.for_each_child(|child| read_namespace_recur(child, namespace, offset_to_ns))?;
+                return Ok(());
+            }
+            // types could be defined inside a function
+            DW_TAG_subprogram => {
+                offset_to_ns.insert(offset, namespace.curr());
+                namespace.push(NamespaceSegment::Subprogram(offset));
+            }
+            DW_TAG_namespace => {
+                // doesn't need to add to map for namespace nodes
+                match entry.name_opt()? {
+                    Some(name) => namespace.push(NamespaceSegment::Namespace(name.into())),
+                    None => {
+                        let id = ANONYMOUS_COUNT.fetch_add(1, Ordering::SeqCst);
+                        namespace.push(NamespaceSegment::Anonymous(id))
+                    }
+                };
+            }
+            _ => {
+                // ignore
+                return Ok(());
+            }
+        }
+    }
+    // recurse into the node with pushed stack
+    node.for_each_child(|child| read_namespace_recur(child, namespace, offset_to_ns))?;
+    namespace.pop();
+
+    if tag == DW_TAG_subprogram {
+    } else if tag == DW_TAG_variable {
+    }
     if is_type_tag(tag) || matches!(tag, DW_TAG_subprogram | DW_TAG_variable) {
         let offset = entry.goff();
-        offset_to_ns.insert(offset, namespace.curr_owned());
+        offset_to_ns.insert(offset, namespace.curr());
         // can have inner types, and may be anonymous
         let mut name = entry.name_opt()?;
 
@@ -91,22 +131,6 @@ fn read_namespace_recur(
         namespace.pop();
         return Ok(());
     }
-    match tag {
-        DW_TAG_compile_unit => {
-            // top-most case
-            node.for_each_child(|child| read_namespace_recur(child, namespace, offset_to_ns))?;
-        }
-        DW_TAG_namespace => {
-            // doesn't need to add to map for namespace nodes
-            let name = entry.name_opt()?;
-            namespace.push(name);
-            node.for_each_child(|child| read_namespace_recur(child, namespace, offset_to_ns))?;
-            namespace.pop();
-        }
-        _ => {
-            // ignore
-        }
-    }
 
     Ok(())
 }
@@ -140,54 +164,67 @@ impl Die<'_, '_> {
     }
 }
 
-pub type Namespace = Arc<str>;
+#[derive(Clone, PartialEq, Eq)]
+pub struct Namespace(Vec<NamespaceSegment>);
+#[derive(Clone, PartialEq, Eq)]
+pub enum NamespaceSegment {
+    Namespace(Arc<str>),
+    Type(Goff),
+    Subprogram(Goff),
+    Anonymous(usize),
+}
+impl std::fmt::Display for Namespace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut iter = self.0.iter();
+        let Some(first) = iter.next() else {
+            return Ok(());
+        };
+        write!(f, "{first}");
+        for n in iter {
+            write!(f, "::{n}");
+        }
+        Ok(())
+    }
+}
+impl std::fmt::Debug for Namespace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self}")
+    }
+}
+impl std::fmt::Display for NamespaceSegment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NamespaceSegment::Namespace(n) => n.fmt(f),
+            NamespaceSegment::Type(goff) => write!(f, "[[ty={goff}]]"),
+            NamespaceSegment::Subprogram(goff) => write!(f, "[[subprogram={goff}]]"),
+            NamespaceSegment::Anonymous(i) => write!(f, "[[anonymous={i}]]"),
+        }
+    }
+}
+impl std::fmt::Debug for NamespaceSegment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self}")
+    }
+}
 
 // used to make unique anonymous namespaces. These need to be completely
 // removed in the final output, so it's safe to make this not stable between runs
 static ANONYMOUS_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+#[derive(Default)]
 struct NamespaceStack {
-    empty: Arc<str>,
-    stack: Vec<Arc<str>>,
+    stack: Vec<NamespaceSegment>,
 }
 impl NamespaceStack {
-    pub fn new() -> Self {
-        Self {
-            empty: Arc::from(""),
-            stack: Default::default(),
-        }
-    }
-    pub fn push(&mut self, s: Option<&str>) {
-        match (s, self.stack.last()) {
-            (None, last) => {
-                let count = ANONYMOUS_COUNT.fetch_add(1, Ordering::SeqCst);
-                let ns = format!("<anonymous_{count}>");
-                match last {
-                    None => {
-                        self.stack.push(Arc::from(ns.as_str()));
-                    }
-                    Some(last) => {
-                        self.stack.push(Arc::from(format!("{last}::{ns}").as_str()));
-                    }
-                }
-            }
-            (Some(s), None) => self.stack.push(Arc::from(s)),
-            (Some(s), Some(last)) => self.stack.push(Arc::from(format!("{last}::{s}").as_str())),
-        }
+    pub fn push(&mut self, s: NamespaceSegment) {
+        self.stack.push(s);
     }
 
     pub fn pop(&mut self) {
         self.stack.pop();
     }
 
-    pub fn curr(&self) -> &Arc<str> {
-        match self.stack.last() {
-            None => &self.empty,
-            Some(last) => last,
-        }
-    }
-
-    pub fn curr_owned(&self) -> Arc<str> {
-        Arc::clone(self.curr())
+    pub fn curr(&self) -> Namespace {
+        Namespace(self.stack.clone())
     }
 }

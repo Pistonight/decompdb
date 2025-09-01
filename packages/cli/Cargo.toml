@@ -6,17 +6,20 @@ publish = false
 license = "MIT"
 
 [dependencies]
-cu = { workspace = true, features = ["cli", "process", "toml", "derive", "coroutine-heavy"] }
+cu = { workspace = true, features = [
+    "cli", "process", "toml", "json", "derive", "coroutine-heavy"
+] }
 tyyaml = { path = "../tyyaml" }
 elf = "0.8.0"
-fxhash = "0.2.1"
+fxhash.workspace = true
 gimli = "0.32.1"
 linkme = "0.3.33"
 rayon = "1.11.0"
 regex = "1.11.1"
-serde = "1"
+serde.workspace = true
 spin = "0.10.0"
 tokio = "1"
+shell-words = "1.1.0"
 
 [[bin]]
 name = "decompdb"

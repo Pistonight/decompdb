@@ -1,6 +1,10 @@
 [paths]
 elf = "../../../botw-decomp/build/uking"
-extract = "../../../botw-decomp/build/decompdb-extract"
+compdb = "../../../botw-decomp/build/compile_commands.json"
+system-header-paths = [
+    "../../../botw-decomp/toolchain/clang-4.0.1/include/c++/v1"
+]
+extract-output = "dejj"
 
 [paths.functions-csv]
 path = "../../../botw-decomp/data/uking_functions.csv"

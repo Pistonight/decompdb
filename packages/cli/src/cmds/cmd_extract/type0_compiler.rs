@@ -10,7 +10,7 @@ use super::bucket::{GoffBuckets, MergeQueue};
 use super::pre::*;
 use super::type_structure::*;
 
-pub fn compile_stage0(mut stage0: TypeStage0) -> cu::Result<TypeStage1> {
+pub fn compile_stage0(mut stage0: TypeStage0) -> cu::Result<TypeStageA> {
     cu::debug!("stage0: compiling {} types", stage0.types.len());
     // ensure primitive types exist
     for p in Prim::iter() {
@@ -41,32 +41,32 @@ pub fn compile_stage0(mut stage0: TypeStage0) -> cu::Result<TypeStage1> {
                 }
             }
             Type0::Typedef(name, target) => {
-                types.push((goff, Type1::Typedef(name, target)));
+                types.push((goff, TypeA::Typedef(name, target)));
             }
             Type0::Enum(name, data) => {
                 let size = *cu::check!(
                     sizes.get(&goff),
                     "unexpected: did not resolve enum size for enum {goff}"
                 )?;
-                let t = Type1::Enum(
+                let t = TypeA::Enum(
                     name,
-                    Type1Enum {
+                    TypeAEnum {
                         byte_size: size,
                         enumerators: data.enumerators,
                     },
                 );
                 types.push((goff, t));
             }
-            Type0::EnumDecl(name) => types.push((goff, Type1::EnumDecl(name))),
-            Type0::Union(name, data) => types.push((goff, Type1::Union(name, data))),
-            Type0::UnionDecl(name) => types.push((goff, Type1::UnionDecl(name))),
-            Type0::Struct(name, data) => types.push((goff, Type1::Struct(name, data))),
-            Type0::StructDecl(name) => types.push((goff, Type1::StructDecl(name))),
+            Type0::EnumDecl(name) => types.push((goff, TypeA::EnumDecl(name))),
+            Type0::Union(name, data) => types.push((goff, TypeA::Union(name, data))),
+            Type0::UnionDecl(name) => types.push((goff, TypeA::UnionDecl(name))),
+            Type0::Struct(name, data) => types.push((goff, TypeA::Struct(name, data))),
+            Type0::StructDecl(name) => types.push((goff, TypeA::StructDecl(name))),
             Type0::Tree(data) => {
                 if let Tree::Base(inner) = &data {
                     merges.push(goff, *inner)?;
                 } else {
-                    types.push((goff, Type1::Tree(data)));
+                    types.push((goff, TypeA::Tree(data)));
                 }
             }
             Type0::Alias(target) => {
@@ -81,11 +81,11 @@ pub fn compile_stage0(mut stage0: TypeStage0) -> cu::Result<TypeStage1> {
     let mut types = cu::check!(make_canonicalized(types, &buckets), "initial canonicalization failed")?;
     // ensure primitive types exist
     for p in Prim::iter() {
-        types.insert(Goff::prim(p), Type1::Prim(p));
+        types.insert(Goff::prim(p), TypeA::Prim(p));
     }
     let types = cu::check!(optimize(&mut buckets, types), "stage0 optimization failed")?;
 
-    let stage1 = TypeStage1 {
+    let stage1 = TypeStageA {
         offset: stage0.offset,
         name: stage0.name,
         // buckets,
@@ -97,11 +97,11 @@ pub fn compile_stage0(mut stage0: TypeStage0) -> cu::Result<TypeStage1> {
     Ok(stage1)
 }
 
-pub fn into_stage2(stage1: TypeStage1) -> TypeStage2 {
+pub fn into_stage2(stage1: TypeStageA) -> TypeStage2 {
     TypeStage2 { types: stage1.types }
 }
 
-pub fn link_stage1(stage2: TypeStage2, stage1: TypeStage1) -> cu::Result<TypeStage2> {
+pub fn link_stage1(stage2: TypeStage2, stage1: TypeStageA) -> cu::Result<TypeStage2> {
     cu::debug!("stage1: linking {} types into stage2", stage1.types.len());
     let mut types = stage2.types;
     for (k, t) in stage1.types {
@@ -258,7 +258,7 @@ fn resolve_size_stage0(goff: Goff, stage0: &TypeStage0, sizes: &mut GoffMap<u32>
     Ok(size)
 }
 
-fn optimize(buckets: &mut GoffBuckets, types: BTreeMap<Goff, Type1>) -> cu::Result<BTreeMap<Goff, Type1>> {
+fn optimize(buckets: &mut GoffBuckets, types: BTreeMap<Goff, TypeA>) -> cu::Result<BTreeMap<Goff, TypeA>> {
     let mut types = types;
     loop {
         let mut merges = MergeQueue::default();
@@ -291,14 +291,14 @@ fn optimize(buckets: &mut GoffBuckets, types: BTreeMap<Goff, Type1>) -> cu::Resu
     Ok(types)
 }
 
-fn make_canonicalized<I: IntoIterator<Item = (Goff, Type1)>>(
+fn make_canonicalized<I: IntoIterator<Item = (Goff, TypeA)>>(
     iter: I,
     buckets: &GoffBuckets,
-) -> cu::Result<BTreeMap<Goff, Type1>> {
+) -> cu::Result<BTreeMap<Goff, TypeA>> {
     make_canonicalized_inner(iter.into_iter().collect(), buckets)
 }
 
-fn make_canonicalized_inner(mut input: GoffMap<Type1>, buckets: &GoffBuckets) -> cu::Result<GoffMap<Type1>> {
+fn make_canonicalized_inner(mut input: GoffMap<TypeA>, buckets: &GoffBuckets) -> cu::Result<GoffMap<TypeA>> {
     loop {
         let old = input.clone();
         let mut map = BTreeMap::default();
@@ -330,7 +330,7 @@ fn make_canonicalized_inner(mut input: GoffMap<Type1>, buckets: &GoffBuckets) ->
     }
 }
 
-fn dedupe_by_hash(map: &BTreeMap<Goff, Type1>, merges: &mut MergeQueue) -> cu::Result<()> {
+fn dedupe_by_hash(map: &BTreeMap<Goff, TypeA>, merges: &mut MergeQueue) -> cu::Result<()> {
     let mut hashes = BTreeMap::default();
     for (goff, type1) in map {
         use std::hash::{Hash, Hasher};
@@ -353,7 +353,7 @@ fn dedupe_by_hash(map: &BTreeMap<Goff, Type1>, merges: &mut MergeQueue) -> cu::R
     Ok(())
 }
 
-fn link_by_decl(map: &BTreeMap<Goff, Type1>, merges: &mut MergeQueue) -> cu::Result<()> {
+fn link_by_decl(map: &BTreeMap<Goff, TypeA>, merges: &mut MergeQueue) -> cu::Result<()> {
     let mut enum_by_name = FxHashMap::default();
     let mut enum_decl_by_name = FxHashMap::default();
     let mut union_by_name = FxHashMap::default();
@@ -362,27 +362,27 @@ fn link_by_decl(map: &BTreeMap<Goff, Type1>, merges: &mut MergeQueue) -> cu::Res
     let mut struct_decl_by_name = FxHashMap::default();
     for (goff, type1) in map {
         match type1 {
-            Type1::Enum(Some(name), _) => {
+            TypeA::Enum(Some(name), _) => {
                 let entry = enum_by_name.entry(name.to_string()).or_insert_with(Vec::new);
                 entry.push(*goff);
             }
-            Type1::EnumDecl(name) => {
+            TypeA::EnumDecl(name) => {
                 let entry = enum_decl_by_name.entry(name.to_string()).or_insert_with(Vec::new);
                 entry.push(*goff);
             }
-            Type1::Union(Some(name), _) => {
+            TypeA::Union(Some(name), _) => {
                 let entry = union_by_name.entry(name.to_string()).or_insert_with(Vec::new);
                 entry.push(*goff);
             }
-            Type1::UnionDecl(name) => {
+            TypeA::UnionDecl(name) => {
                 let entry = union_decl_by_name.entry(name.to_string()).or_insert_with(Vec::new);
                 entry.push(*goff);
             }
-            Type1::Struct(Some(name), _) => {
+            TypeA::Struct(Some(name), _) => {
                 let entry = struct_by_name.entry(name.to_string()).or_insert_with(Vec::new);
                 entry.push(*goff);
             }
-            Type1::StructDecl(name) => {
+            TypeA::StructDecl(name) => {
                 let entry = struct_decl_by_name.entry(name.to_string()).or_insert_with(Vec::new);
                 entry.push(*goff);
             }
@@ -423,16 +423,16 @@ fn link_by_decl(map: &BTreeMap<Goff, Type1>, merges: &mut MergeQueue) -> cu::Res
     Ok(())
 }
 
-fn link_by_name(map: &BTreeMap<Goff, Type1>, merges: &mut MergeQueue) -> cu::Result<()> {
+fn link_by_name(map: &BTreeMap<Goff, TypeA>, merges: &mut MergeQueue) -> cu::Result<()> {
     let mut union_by_name = FxHashMap::default();
     let mut struct_by_name = FxHashMap::default();
     for (goff, type1) in map {
         match type1 {
-            Type1::Union(Some(name), data) => {
+            TypeA::Union(Some(name), data) => {
                 let entry = union_by_name.entry(name.to_string()).or_insert_with(Vec::new);
                 entry.push((*goff, data));
             }
-            Type1::Struct(Some(name), data) => {
+            TypeA::Struct(Some(name), data) => {
                 let entry = struct_by_name.entry(name.to_string()).or_insert_with(Vec::new);
                 entry.push((*goff, data));
             }
@@ -468,12 +468,12 @@ fn link_by_name(map: &BTreeMap<Goff, Type1>, merges: &mut MergeQueue) -> cu::Res
 fn process_merges(
     buckets: &mut GoffBuckets,
     merges: MergeQueue,
-    map: BTreeMap<Goff, Type1>,
-) -> cu::Result<BTreeMap<Goff, Type1>> {
+    map: BTreeMap<Goff, TypeA>,
+) -> cu::Result<BTreeMap<Goff, TypeA>> {
     fn check_merge(
         k1: Goff,
         k2: Goff,
-        map: &BTreeMap<Goff, Type1>,
+        map: &BTreeMap<Goff, TypeA>,
         checked: &mut BTreeSet<(Goff, Goff)>,
         new_mq: &mut MergeQueue,
     ) -> cu::Result<()> {
@@ -483,14 +483,14 @@ fn process_merges(
         let t1 = cu::check!(map.get(&k1), "failed to get type {k1}")?;
         let t2 = cu::check!(map.get(&k2), "failed to get type {k2}")?;
         match (t1, t2) {
-            (Type1::Prim(a), Type1::Prim(b)) => {
+            (TypeA::Prim(a), TypeA::Prim(b)) => {
                 cu::ensure!(
                     a == b,
                     "two different primitive types cannot be merged: {k1}={a} and {k2}={b}"
                 );
                 Ok(())
             }
-            (Type1::Typedef(a_name, a), Type1::Typedef(b_name, b)) => {
+            (TypeA::Typedef(a_name, a), TypeA::Typedef(b_name, b)) => {
                 cu::ensure!(
                     a_name == b_name,
                     "two typedefs of different names cannot be merged:\n- {k1}={a_name:?}\n- {k2}={b_name:?}"
@@ -500,7 +500,7 @@ fn process_merges(
                     "cannot merge typedefs {k1} and {k2}, name is {a_name:?}"
                 )
             }
-            (Type1::Enum(a_name, a), Type1::Enum(b_name, b)) => {
+            (TypeA::Enum(a_name, a), TypeA::Enum(b_name, b)) => {
                 cu::ensure!(
                     a_name == b_name,
                     "two enums of different names cannot be merged:\n- {k1}={a_name:?}\n- {k2}={b_name:?}"
@@ -511,21 +511,21 @@ fn process_merges(
                 );
                 Ok(())
             }
-            (Type1::Enum(name1, _), Type1::EnumDecl(name2)) | (Type1::EnumDecl(name2), Type1::Enum(name1, _)) => {
+            (TypeA::Enum(name1, _), TypeA::EnumDecl(name2)) | (TypeA::EnumDecl(name2), TypeA::Enum(name1, _)) => {
                 cu::ensure!(
                     name1.as_deref() == Some(name2.as_str()),
                     "cannot merge enum definition and declaration of different names: defn_name={name1:?}, decl_name={name2:?}"
                 );
                 Ok(())
             }
-            (Type1::EnumDecl(a_name), Type1::EnumDecl(b_name)) => {
+            (TypeA::EnumDecl(a_name), TypeA::EnumDecl(b_name)) => {
                 cu::ensure!(
                     a_name == b_name,
                     "two enum decls of different names cannot be merged: {k1}={a_name:?} and {k2}={b_name:?}"
                 );
                 Ok(())
             }
-            (Type1::Union(a_name, a), Type1::Union(b_name, b)) => {
+            (TypeA::Union(a_name, a), TypeA::Union(b_name, b)) => {
                 cu::ensure!(
                     a_name == b_name,
                     "two unions of different names cannot be merged:\n- {k1}={a_name:?}\n- {k2}={b_name:?}"
@@ -535,21 +535,21 @@ fn process_merges(
                     "cannot merge unions {k1} and {k2}, name is {a_name:?}"
                 )
             }
-            (Type1::Union(name1, _), Type1::UnionDecl(name2)) | (Type1::UnionDecl(name2), Type1::Union(name1, _)) => {
+            (TypeA::Union(name1, _), TypeA::UnionDecl(name2)) | (TypeA::UnionDecl(name2), TypeA::Union(name1, _)) => {
                 cu::ensure!(
                     name1.as_deref() == Some(name2.as_str()),
                     "cannot merge union definition and declaration of different names: defn_name={name1:?}, decl_name={name2:?}"
                 );
                 Ok(())
             }
-            (Type1::UnionDecl(a_name), Type1::UnionDecl(b_name)) => {
+            (TypeA::UnionDecl(a_name), TypeA::UnionDecl(b_name)) => {
                 cu::ensure!(
                     a_name == b_name,
                     "two union decls of different names cannot be merged: {k1}={a_name:?} and {k2}={b_name:?}"
                 );
                 Ok(())
             }
-            (Type1::Struct(a_name, a), Type1::Struct(b_name, b)) => {
+            (TypeA::Struct(a_name, a), TypeA::Struct(b_name, b)) => {
                 cu::ensure!(
                     a_name == b_name,
                     "two structs of different names cannot be merged:\n- {k1}={a_name:?}\n- {k2}={b_name:?}"
@@ -559,22 +559,22 @@ fn process_merges(
                     "cannot merge structs {k1} and {k2}, name is {a_name:?}"
                 )
             }
-            (Type1::Struct(name1, _), Type1::StructDecl(name2))
-            | (Type1::StructDecl(name2), Type1::Struct(name1, _)) => {
+            (TypeA::Struct(name1, _), TypeA::StructDecl(name2))
+            | (TypeA::StructDecl(name2), TypeA::Struct(name1, _)) => {
                 cu::ensure!(
                     name1.as_deref() == Some(name2.as_str()),
                     "cannot merge struct definition and declaration of different names: defn_name={name1:?}, decl_name={name2:?}"
                 );
                 Ok(())
             }
-            (Type1::StructDecl(a_name), Type1::StructDecl(b_name)) => {
+            (TypeA::StructDecl(a_name), TypeA::StructDecl(b_name)) => {
                 cu::ensure!(
                     a_name == b_name,
                     "two struct decls of different names cannot be merged: {k1}={a_name:?} and {k2}={b_name:?}"
                 );
                 Ok(())
             }
-            (Type1::Tree(a), Type1::Tree(b)) => {
+            (TypeA::Tree(a), TypeA::Tree(b)) => {
                 cu::check!(
                     tree_merge_checked(a, b, new_mq),
                     "cannot merge type trees {k1} and {k2}"
@@ -599,12 +599,12 @@ fn process_merges(
     make_canonicalized(map, buckets)
 }
 
-fn do_merge_type1(mut from: &mut Type1, mut to: &mut Type1) -> cu::Result<()> {
+fn do_merge_type1(mut from: &mut TypeA, mut to: &mut TypeA) -> cu::Result<()> {
     match (&mut from, &mut to) {
-        (Type1::Prim(f), Type1::Prim(t)) => {
+        (TypeA::Prim(f), TypeA::Prim(t)) => {
             cu::ensure!(f == t, "two different primitive types cannot be merged: {f} and {t}");
         }
-        (Type1::Typedef(name1, f), Type1::Typedef(name2, t)) => {
+        (TypeA::Typedef(name1, f), TypeA::Typedef(name2, t)) => {
             cu::ensure!(
                 name1 == name2,
                 "two typedefs of different names cannot be merged: {name1:?} and {name2:?}"
@@ -612,85 +612,85 @@ fn do_merge_type1(mut from: &mut Type1, mut to: &mut Type1) -> cu::Result<()> {
             let (k, _) = super::bucket::pick_bucket_primary_key(*f, *t)?;
             *t = k;
         }
-        (Type1::Enum(name1, f), Type1::Enum(name2, t)) => {
+        (TypeA::Enum(name1, f), TypeA::Enum(name2, t)) => {
             cu::ensure!(
                 name1 == name2,
                 "two enums of different names cannot be merged: {name1:?} and {name2:?}"
             );
             cu::check!(t.merge_from(f), "failed to merge enum definitions")?;
         }
-        (Type1::Enum(name1, _), Type1::EnumDecl(name2)) => {
+        (TypeA::Enum(name1, _), TypeA::EnumDecl(name2)) => {
             cu::ensure!(
                 name1.as_deref() == Some(name2.as_str()),
                 "cannot merge enum definition and declaration of different names: defn_name={name1:?}, decl_name={name2:?}"
             );
             *to = from.clone();
         }
-        (Type1::EnumDecl(name2), Type1::Enum(name1, _)) => {
+        (TypeA::EnumDecl(name2), TypeA::Enum(name1, _)) => {
             cu::ensure!(
                 name1.as_deref() == Some(name2.as_str()),
                 "cannot merge enum definition and declaration of different names: defn_name={name1:?}, decl_name={name2:?}"
             );
         }
-        (Type1::EnumDecl(name1), Type1::EnumDecl(name2)) => {
+        (TypeA::EnumDecl(name1), TypeA::EnumDecl(name2)) => {
             cu::ensure!(
                 name1 == name2,
                 "two enum decls of different names cannot be merged: {name1:?} and {name2:?}"
             );
         }
-        (Type1::Union(name1, f), Type1::Union(name2, t)) => {
+        (TypeA::Union(name1, f), TypeA::Union(name2, t)) => {
             cu::ensure!(
                 name1 == name2,
                 "two unions of different names cannot be merged: {name1:?} and {name2:?}"
             );
             cu::check!(t.merge_from(f), "failed to merge union definitions")?;
         }
-        (Type1::Union(name1, _), Type1::UnionDecl(name2)) => {
+        (TypeA::Union(name1, _), TypeA::UnionDecl(name2)) => {
             cu::ensure!(
                 name1.as_deref() == Some(name2.as_str()),
                 "cannot merge union definition and declaration of different names: defn_name={name1:?}, decl_name={name2:?}"
             );
             *to = from.clone();
         }
-        (Type1::UnionDecl(name2), Type1::Union(name1, _)) => {
+        (TypeA::UnionDecl(name2), TypeA::Union(name1, _)) => {
             cu::ensure!(
                 name1.as_deref() == Some(name2.as_str()),
                 "cannot merge union definition and declaration of different names: defn_name={name1:?}, decl_name={name2:?}"
             );
         }
-        (Type1::UnionDecl(name1), Type1::UnionDecl(name2)) => {
+        (TypeA::UnionDecl(name1), TypeA::UnionDecl(name2)) => {
             cu::ensure!(
                 name1 == name2,
                 "two union decls of different names cannot be merged: {name1:?} and {name2:?}"
             );
         }
-        (Type1::Struct(name1, f), Type1::Struct(name2, t)) => {
+        (TypeA::Struct(name1, f), TypeA::Struct(name2, t)) => {
             cu::ensure!(
                 name1 == name2,
                 "two structs of different names cannot be merged: {name1:?} and {name2:?}"
             );
             cu::check!(t.merge_from(f), "failed to merge structs definitions")?;
         }
-        (Type1::Struct(name1, _), Type1::StructDecl(name2)) => {
+        (TypeA::Struct(name1, _), TypeA::StructDecl(name2)) => {
             cu::ensure!(
                 name1.as_deref() == Some(name2.as_str()),
                 "cannot merge struct definition and declaration of different names: defn_name={name1:?}, decl_name={name2:?}"
             );
             *to = from.clone();
         }
-        (Type1::StructDecl(name2), Type1::Struct(name1, _)) => {
+        (TypeA::StructDecl(name2), TypeA::Struct(name1, _)) => {
             cu::ensure!(
                 name1.as_deref() == Some(name2.as_str()),
                 "cannot merge struct definition and declaration of different names: defn_name={name1:?}, decl_name={name2:?}"
             );
         }
-        (Type1::StructDecl(name1), Type1::StructDecl(name2)) => {
+        (TypeA::StructDecl(name1), TypeA::StructDecl(name2)) => {
             cu::ensure!(
                 name1 == name2,
                 "two struct decls of different names cannot be merged: {name1:?} and {name2:?}"
             );
         }
-        (Type1::Tree(f), Type1::Tree(t)) => {
+        (TypeA::Tree(f), TypeA::Tree(t)) => {
             cu::check!(
                 tree_merge_checked(f, t, &mut Default::default()),
                 "cannot merge type trees"
