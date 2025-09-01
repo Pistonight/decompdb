@@ -53,19 +53,7 @@
                   {
                     "id": "0x555b88f95590",
                     "kind": "ConstantExpr",
-                    "range": {
-                      "begin": {
-                        "offset": 421,
-                        "line": 15,
-                        "col": 29,
-                        "tokLen": 4
-                      },
-                      "end": {
-                        "offset": 421,
-                        "col": 29,
-                        "tokLen": 4
-                      }
-                    },
+                    "range": { },
                     "type": {
                       "qualType": "unsigned long"
                     },
@@ -75,18 +63,7 @@
                       {
                         "id": "0x555b88f95348",
                         "kind": "IntegerLiteral",
-                        "range": {
-                          "begin": {
-                            "offset": 421,
-                            "col": 29,
-                            "tokLen": 4
-                          },
-                          "end": {
-                            "offset": 421,
-                            "col": 29,
-                            "tokLen": 4
-                          }
-                        },
+                        "range": { },
                         "type": {
                           "qualType": "unsigned long"
                         },

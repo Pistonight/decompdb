@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use cu::pre::*;
@@ -6,9 +7,9 @@ use crate::config::Config;
 
 use super::namespace;
 use super::pre::*;
-use super::stage0_clang_parse::CompileCommand;
+use super::stage0_clang_parse::{self, CompileCommand};
 use super::stage0_loader;
-use super::type0_compiler;
+// use super::type0_compiler;
 
 /// Extract database artifacts from DWARF info from an ELF file
 #[derive(Debug, clap::Parser, AsRef)]
@@ -40,8 +41,15 @@ pub fn run(config: Config) -> cu::Result<()> {
 async fn run_internal(config: Config) -> cu::Result<()> {
     let config = Arc::new(config);
     cu::fs::make_dir(&config.paths.extract_output)?;
-    let compile_commands = cu::fs::read_string(&config.paths.compdb)?;
-    let compile_commands = json::parse::<Vec<CompileCommand>>(&compile_commands)?;
+    let compile_commands = {
+        let cc = cu::fs::read_string(&config.paths.compdb)?;
+        let cc_vec = json::parse::<Vec<CompileCommand>>(&cc)?;
+        let mut cc_map = BTreeMap::new();
+        for c in cc_vec {
+            cc_map.insert(c.file.clone(), c);
+        }
+        cc_map
+    };
 
     let bytes: Arc<[u8]> = cu::fs::read(&config.paths.elf)?.into();
     let dwarf = Dwarf::try_parse(bytes)?;
@@ -63,7 +71,6 @@ async fn run_internal(config: Config) -> cu::Result<()> {
         let mut stage1s = Vec::with_capacity(units.len());
 
         for unit in units {
-            // let unit = Arc::clone(unit);
             let config = Arc::clone(&config);
             let handle = pool.spawn(async move {
                 let ns = namespace::load_namespaces(&unit)?;
@@ -88,6 +95,16 @@ async fn run_internal(config: Config) -> cu::Result<()> {
         stage1s.sort_unstable_by_key(|x| x.offset);
         stage1s
     };
+
+    let stage1 = {
+        let bar = cu::progress_bar(stage0.len(), "stage0 -> stage1: parsing type names");
+        for stage0 in stage0 {
+            let command = cu::check!(compile_commands.get(&stage0.name), "cannot find compile command for {}", stage0.name)?;
+            let stage1 = stage0_clang_parse::parse_type(stage0, command).await?;
+        }
+    };
+
+    cu::hint!("done");
 
     // let stage2 = {
     //     let len = stage1.len();

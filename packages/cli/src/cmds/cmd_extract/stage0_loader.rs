@@ -73,11 +73,10 @@ fn load_type_at<'a, 'b>(node: DieNode<'a, 'b>, ctx: &mut LoadTypeCtx) -> cu::Res
                         entry.namespaced_name(&ctx.namespaces),
                         "failed to read name of the typedef at {offset}"
                     )?;
-                    // typedef name shouldn't be templated
-                    cu::ensure!(
-                        !typedef_name.contains('<'),
-                        "unexpected templated typedef name at {offset}"
-                    );
+                    // note: typedef name could be templated with using
+                    // for example:
+                    // template <bool __b>
+                    // using bool_constant = integral_constant<bool, __b>;
                     Type0::Typedef(typedef_name, entry.to_global(loff))
                 }
             }
@@ -265,14 +264,9 @@ fn load_enum_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu::
 fn load_union_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu::Result<Type0> {
     let offset = entry.goff();
     let name = cu::check!(
-        entry.namespaced_name_opt(&ctx.namespaces),
+        entry.namespaced_untemplated_name_opt(&ctx.namespaces),
         "failed to get union name at {offset}"
     )?;
-    // remove the templates from the name
-    let name = name.map(|x| match x.find('<') {
-        None => x,
-        Some(i) => x[..i].to_string(),
-    });
     let is_decl = cu::check!(
         entry.flag(DW_AT_declaration),
         "failed to check if union is declaration at {offset}"
@@ -360,14 +354,9 @@ fn load_union_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu:
 fn load_struct_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu::Result<Type0> {
     let offset = entry.goff();
     let name = cu::check!(
-        entry.namespaced_name_opt(&ctx.namespaces),
+        entry.namespaced_untemplated_name_opt(&ctx.namespaces),
         "failed to get struct name at {offset}"
     )?;
-    // remove the templates from the name
-    let name = name.map(|x| match x.find('<') {
-        None => x,
-        Some(i) => x[..i].to_string(),
-    });
     let is_decl = cu::check!(
         entry.flag(DW_AT_declaration),
         "failed to check if struct is declaration at {offset}"
@@ -574,7 +563,7 @@ fn load_struct_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu
 /// - DW_TAG_template_type_parameter,
 /// - DW_TAG_template_value_parameter
 /// - DW_TAG_GNU_template_parameter_pack
-fn load_template_type_parameter(entry: &Die<'_, '_>, out: &mut Vec<TemplateArg>) -> cu::Result<()> {
+fn load_template_type_parameter(entry: &Die<'_, '_>, out: &mut Vec<TemplateArg<Goff>>) -> cu::Result<()> {
     match entry.tag() {
         DW_TAG_template_type_parameter => {
             let type_loff = cu::check!(

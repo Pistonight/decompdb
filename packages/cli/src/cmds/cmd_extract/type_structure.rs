@@ -105,6 +105,42 @@ impl TypeAEnum {
     }
 }
 
+pub struct TypeStage1 {
+    pub offset: usize,
+    pub name: String,
+    pub types: GoffMap<Type1>,
+    pub config: Arc<Config>,
+}
+
+/// Type0 + names resolved by clang
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Type1 {
+    /// Pritimive type
+    Prim(Prim),
+    /// Typedef <other> name; Other is offset in debug info.
+    /// Name could have template args
+    Typedef(NamespacedTemplatedName, Goff),
+    /// Enum. The name does not include template args. could be anonymous
+    Enum(Option<NamespacedName>, Type0Enum),
+    /// Declaration of an enum. 
+    /// Name includes template args
+    EnumDecl(NamespacedTemplatedName),
+    /// Union. The name does not include template args. could be anonymous
+    Union(Option<NamespacedName>, Type0Union),
+    /// Declaration of union. 
+    /// Name includes template args
+    UnionDecl(NamespacedTemplatedName),
+    /// Struct or Class. The name does not include template args. could be anonymous
+    Struct(Option<NamespacedName>, Type0Struct),
+    /// Declaration of struct or class. 
+    /// Name includes template args
+    StructDecl(NamespacedTemplatedName),
+    /// Composition of other types
+    Tree(Tree<Goff>),
+    /// Alias to another type for type layout purpose (basically typedef without a name)
+    Alias(Goff),
+}
+
 pub struct TypeStage0 {
     pub offset: usize,
     pub name: String,
@@ -117,24 +153,47 @@ pub struct TypeStage0 {
 pub enum Type0 {
     /// Pritimive type
     Prim(Prim),
-    /// Typedef <other> name; Other is offset in debug info
-    Typedef(String, Goff),
+    /// Typedef <other> name; Other is offset in debug info.
+    /// Name could have template args
+    Typedef(NamespacedName, Goff),
     /// Enum. The name does not include template args. could be anonymous
-    Enum(Option<String>, Type0Enum),
-    /// Declaration of an enum
-    EnumDecl(String),
+    Enum(Option<NamespacedName>, Type0Enum),
+    /// Declaration of an enum. 
+    /// Name includes template args
+    EnumDecl(NamespacedName),
     /// Union. The name does not include template args. could be anonymous
-    Union(Option<String>, Type0Union),
-    /// Declaration of union
-    UnionDecl(String),
+    Union(Option<NamespacedName>, Type0Union),
+    /// Declaration of union. 
+    /// Name includes template args
+    UnionDecl(NamespacedName),
     /// Struct or Class. The name does not include template args. could be anonymous
-    Struct(Option<String>, Type0Struct),
-    /// Declaration of struct or class
-    StructDecl(String),
+    Struct(Option<NamespacedName>, Type0Struct),
+    /// Declaration of struct or class. 
+    /// Name includes template args
+    StructDecl(NamespacedName),
     /// Composition of other types
     Tree(Tree<Goff>),
-    /// Alias to another type (basically typedef without a name)
+    /// Alias to another type for type layout purpose (basically typedef without a name)
     Alias(Goff),
+}
+
+impl Type0 {
+    pub fn fmt_cpp_name(&self, map: &GoffMap<Type0>) -> cu::Result<String> {
+        match self {
+            Type0::Prim(prim) => todo!(),
+            Type0::Typedef(namespaced_name, goff) => todo!(),
+            Type0::Enum(namespaced_name, type0_enum) => todo!(),
+            Type0::EnumDecl(namespaced_name) => todo!(),
+            Type0::Union(namespaced_name, type0_union) => todo!(),
+            Type0::UnionDecl(namespaced_name) => todo!(),
+            Type0::Struct(namespaced_name, type0_struct) => todo!(),
+            Type0::StructDecl(namespaced_name) => todo!(),
+            Type0::Tree(tree) => todo!(),
+            Type0::Alias(goff) => todo!(),
+        }
+
+
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,7 +218,7 @@ pub struct Enumerator {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Type0Union {
     /// Template arguments, if any
-    pub template_args: Vec<TemplateArg>,
+    pub template_args: Vec<TemplateArg<Goff>>,
     /// Byte size of the union (should be size of the largest member)
     pub byte_size: u32,
     /// Union members. The members must have offset of 0 and special of None
@@ -210,7 +269,7 @@ impl Type0Union {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Type0Struct {
     /// Template specialization of the struct, if any
-    pub template_args: Vec<TemplateArg>,
+    pub template_args: Vec<TemplateArg<Goff>>,
     /// Byte size of the struct
     pub byte_size: u32,
     /// Vtable of the struct. (index, entry).
@@ -424,18 +483,30 @@ pub enum SpecialMember {
     Bitfield(u32), // byte_size
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TemplateArg {
-    Const(i64),
-    Type(Goff),
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct NamespacedTemplatedName {
+    /// The untemplated base name (with namespace)
+    pub base: NamespacedName,
+    /// The template types
+    pub templates: Vec<TemplateArg<NamespaceLiteral>>,
+}
+impl NamespacedTemplatedName {
+    pub fn new(base: &NamespacedName) -> Self {
+        Self {base: base.clone(), templates: vec![]}
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Name<T> {
-    /// The untemplated base name (with namespace)
-    pub base: Arc<str>,
-    /// The template types
-    pub templates: Vec<T>,
+
+#[derive(Clone, PartialEq, Eq, Hash, Display, DebugCustom, Serialize, Deserialize)]
+pub enum TemplateArg<T> {
+    // Constant value. Could also be boolean (0=false, 1=true)
+    #[display("{}", _0)]
+    #[debug("{}", _0)]
+    Const(i64),
+    #[display("{}", _0)]
+    #[debug("{}", _0)]
+    Type(T),
 }
 
 // pub fn parse_templated_name(name: &str) -> cu::Result<

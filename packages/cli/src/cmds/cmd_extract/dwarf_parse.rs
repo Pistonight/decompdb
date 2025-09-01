@@ -277,10 +277,12 @@ impl<'x> Die<'x, '_> {
     pub fn tag(&self) -> Tag {
         self.entry.tag()
     }
+
     /// Get the name of the entry
     pub fn name_owned(&self) -> cu::Result<String> {
         Ok(self.name()?.to_string())
     }
+
     /// Get the name of the entry
     pub fn name(&self) -> cu::Result<&str> {
         let value = self.name_opt()?;
@@ -291,6 +293,36 @@ impl<'x> Die<'x, '_> {
             self.unit
         )?;
         Ok(value)
+    }
+    /// Get the name of the entry before the first `<`. This can only be used
+    /// for types, and not function names, because of `operator<=`
+    pub fn untemplated_name_owned(&self) -> cu::Result<String> {
+        Ok(self.untemplated_name()?.to_string())
+    }
+
+    /// Get the name of the entry before the first `<`. This can only be used
+    /// for types, and not function names, because of `operator<=`
+    pub fn untemplated_name(&self) -> cu::Result<&str> {
+        let value = self.untemplated_name_opt()?;
+        let offset = self.goff();
+        let value = cu::check!(
+            value,
+            "DW_AT_name is missing for entry at offset {offset} in {}",
+            self.unit
+        )?;
+        Ok(value)
+    }
+    
+    /// Get the name of the entry before the first `<`. This can only be used
+    /// for types, and not function names, because of `operator<=`
+    pub fn untemplated_name_opt(&self) -> cu::Result<Option<&str>> {
+        let value = self.name_opt()?;
+        Ok(value.map(|x| {
+            match x.find('<') {
+                Some(i) => &x[..i],
+                None => x
+            }
+        }))
     }
 
     /// Get the DW_AT_name of a DIE, if it exists
@@ -587,5 +619,38 @@ impl Goff {
 
     pub const fn is_prim(self) -> bool {
         return self.0 >= 0x1FFFF0000;
+    }
+}
+
+impl Serialize for Goff {
+    fn serialize<
+    S: serde::Serializer
+    >(&self, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Goff {
+    fn deserialize<
+    D: serde::Deserializer<'de>
+    >(de: D) -> Result<Self, D::Error> {
+        return de.deserialize_str(Visitor);
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = Goff;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "a hex integer literal")
+            }
+            fn visit_str<
+            E: serde::de::Error
+            >(self, v: &str) -> Result<Self::Value, E> {
+                match cu::parse::<usize>(v) {
+                    Ok(x) => Ok(Goff(x)),
+                    Err(e) => {
+                        Err(serde::de::Error::custom(format!("failed to parse Goff: {e}")))
+                    }
+                }
+            }
+        }
     }
 }

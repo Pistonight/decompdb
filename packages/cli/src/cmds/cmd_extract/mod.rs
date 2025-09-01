@@ -11,7 +11,7 @@ mod namespace;
 
 mod stage0_clang_parse;
 mod stage0_loader;
-mod type0_compiler;
+// mod type0_compiler;
 // mod type_compiler;
 // mod type_optimizer;
 // mod type_linker;
@@ -19,6 +19,6 @@ mod type_structure;
 
 mod pre {
     pub use super::dwarf_parse::*;
-    pub use super::namespace::Namespace;
+    pub use super::namespace::{Namespace, NamespacedName, NameSeg, NamespaceLiteral};
     pub use gimli::constants::*;
 }

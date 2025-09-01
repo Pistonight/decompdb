@@ -149,6 +149,26 @@ impl Prim {
         }
     }
 
+    pub const fn to_cpp(&self) -> &'static str {
+        match self {
+            Prim::Void => "void",
+            Prim::Bool => "bool",
+            Prim::U8 => "uint8_t",
+            Prim::U16 => "uint16_t",
+            Prim::U32 => "uint32_t",
+            Prim::U64 => "uint64_t",
+            Prim::U128 => "uint128_t",
+            Prim::I8 => "int8_t",
+            Prim::I16 => "int16_t",
+            Prim::I32 => "int32_t",
+            Prim::I64 => "int64_t",
+            Prim::I128 => "int128_t",
+            Prim::F32 => "float32_t",
+            Prim::F64 => "float64_t",
+            Prim::F128 => "float128_t",
+        }
+    }
+
     /// Convert from string representation to self.
     pub fn from_str(x: &str) -> Option<Self> {
         Some(match x {

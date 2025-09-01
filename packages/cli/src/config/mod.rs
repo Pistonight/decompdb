@@ -6,8 +6,8 @@ use tyyaml::Prim;
 
 mod extract_resolution;
 pub use extract_resolution::*;
-mod util;
-pub use util::*;
+
+use crate::serde_impl::Regex;
 
 /// Load config from a file
 pub fn load(path: impl AsRef<Path>) -> cu::Result<Config> {
@@ -67,7 +67,7 @@ pub struct CfgExtract {
     /// Rules for resolving type names
     pub name_resolution: CfgExtractResolution,
     /// Regex for the virtual function pointer field
-    pub vfptr_field_regex: CfgRegex,
+    pub vfptr_field_regex: Regex,
 }
 
 impl CfgExtract {

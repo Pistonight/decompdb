@@ -5,6 +5,8 @@ use std::sync::{
 
 use cu::pre::*;
 
+use crate::serde_impl::ArcStr;
+
 use super::pre::*;
 
 /// Load the namespaces in this compilation unit as a global offset map
@@ -40,9 +42,10 @@ fn read_namespace_recur(
     let offset = entry.goff();
     let tag = entry.tag();
     if is_type_tag(tag) {
+        let name = entry.name()?;
         // types could be defined inside a type
         offset_to_ns.insert(offset, namespace.curr());
-        namespace.push(NamespaceSegment::Type(offset));
+        namespace.push(NameSeg::Type(offset, name.into()));
     } else {
         match tag {
             // simply recurse
@@ -53,15 +56,15 @@ fn read_namespace_recur(
             // types could be defined inside a function
             DW_TAG_subprogram => {
                 offset_to_ns.insert(offset, namespace.curr());
-                namespace.push(NamespaceSegment::Subprogram(offset));
+                namespace.push(NameSeg::Subprogram(offset));
             }
             DW_TAG_namespace => {
                 // doesn't need to add to map for namespace nodes
                 match entry.name_opt()? {
-                    Some(name) => namespace.push(NamespaceSegment::Namespace(name.into())),
+                    Some(name) => namespace.push(NameSeg::Name(name.into())),
                     None => {
-                        let id = ANONYMOUS_COUNT.fetch_add(1, Ordering::SeqCst);
-                        namespace.push(NamespaceSegment::Anonymous(id))
+                        // let id = ANONYMOUS_COUNT.fetch_add(1, Ordering::SeqCst);
+                        namespace.push(NameSeg::Anonymous)
                     }
                 };
             }
@@ -75,135 +78,145 @@ fn read_namespace_recur(
     node.for_each_child(|child| read_namespace_recur(child, namespace, offset_to_ns))?;
     namespace.pop();
 
-    if tag == DW_TAG_subprogram {
-    } else if tag == DW_TAG_variable {
-    }
-    if is_type_tag(tag) || matches!(tag, DW_TAG_subprogram | DW_TAG_variable) {
-        let offset = entry.goff();
-        offset_to_ns.insert(offset, namespace.curr());
-        // can have inner types, and may be anonymous
-        let mut name = entry.name_opt()?;
-
-        // for types inside subroutines, the subroutine name might be from abstract_origin
-        // TODO: move this to dwarf_parse when doing (recursive) function parsing
-        let mut subprogram_name = None;
-        if tag == DW_TAG_subprogram && name.is_none() {
-            name = entry.str_opt(DW_AT_linkage_name)?;
-            if name.is_none() {
-                let mut entries = vec![];
-                let loff = entry.loff_opt(DW_AT_specification)?;
-                if let Some(loff) = loff {
-                    let spec_entry = entry.unit().entry_at(loff)?;
-                    entries.push(spec_entry);
-                }
-                let loff = entry.loff_opt(DW_AT_abstract_origin)?;
-                if let Some(loff) = loff {
-                    let origin_entry = entry.unit().entry_at(loff)?;
-                    entries.push(origin_entry);
-                }
-                while subprogram_name.is_none() {
-                    let Some(entry) = entries.pop() else {
-                        break;
-                    };
-                    subprogram_name = entry.name_opt()?.map(|x| x.to_string());
-                    if subprogram_name.is_none() {
-                        subprogram_name = entry.str_opt(DW_AT_linkage_name)?.map(|x| x.to_string());
-                    }
-                    if subprogram_name.is_none() {
-                        let loff = entry.loff_opt(DW_AT_specification)?;
-                        if let Some(loff) = loff {
-                            let spec_entry = entry.unit().entry_at(loff)?;
-                            entries.push(spec_entry);
-                        }
-                        let loff = entry.loff_opt(DW_AT_abstract_origin)?;
-                        if let Some(loff) = loff {
-                            let origin_entry = entry.unit().entry_at(loff)?;
-                            entries.push(origin_entry);
-                        }
-                    }
-                }
-                name = subprogram_name.as_deref();
-            }
-        }
-
-        namespace.push(name);
-        node.for_each_child(|child| read_namespace_recur(child, namespace, offset_to_ns))?;
-        namespace.pop();
-        return Ok(());
-    }
-
     Ok(())
 }
 impl Die<'_, '_> {
-    /// Get the name of the entry with namespace prefix
-    pub fn namespaced_name(&self, namespaces: &GoffMap<Namespace>) -> cu::Result<String> {
-        let name = self.name()?;
-        let offset = self.goff();
-        let Some(namespace) = namespaces.get(&offset) else {
-            cu::bail!("cannot find namespace for entry {offset}, with name '{name}'");
+    /// Get the name of the entry with namespace prefix, without templated args
+    pub fn namespaced_untemplated_name(&self, namespaces: &GoffMap<Namespace>) -> cu::Result<NamespacedName> {
+        let name = self.untemplated_name()?;
+        Self::combine_namespace_and_name(namespaces, self.goff(), name)
+    }
+    /// Get the name of the entry with namespace prefix, without templated args
+    pub fn namespaced_untemplated_name_opt(&self, namespaces: &GoffMap<Namespace>) -> cu::Result<Option<NamespacedName>> {
+        let Some(name) = self.untemplated_name_opt()? else {
+            return Ok(None);
         };
-        if namespace.is_empty() {
-            return Ok(name.to_string());
-        }
-        Ok(format!("{namespace}::{name}"))
+        Self::combine_namespace_and_name(namespaces, self.goff(), name).map(Some)
+    }
+    /// Get the name of the entry with namespace prefix
+    pub fn namespaced_name(&self, namespaces: &GoffMap<Namespace>) -> cu::Result<NamespacedName> {
+        let name = self.name()?;
+        Self::combine_namespace_and_name(namespaces, self.goff(), name)
     }
 
     /// Get the name of the entry with namespace prefix, optional
-    pub fn namespaced_name_opt(&self, namespaces: &GoffMap<Namespace>) -> cu::Result<Option<String>> {
+    pub fn namespaced_name_opt(&self, namespaces: &GoffMap<Namespace>) -> cu::Result<Option<NamespacedName>> {
         let Some(name) = self.name_opt()? else {
             return Ok(None);
         };
-        let offset = self.goff();
-        let Some(namespace) = namespaces.get(&offset) else {
-            cu::bail!("cannot find namespace for entry {offset}, with name '{name}'");
-        };
-        if namespace.is_empty() {
-            return Ok(Some(name.to_string()));
-        }
-        Ok(Some(format!("{namespace}::{name}")))
+        Self::combine_namespace_and_name(namespaces, self.goff(), name).map(Some)
+    }
+
+    fn combine_namespace_and_name(namespaces: &GoffMap<Namespace>, offset: Goff, name: &str) -> cu::Result<NamespacedName> {
+        let namespace = cu::check!(
+            namespaces.get(&offset),
+            "cannot find namespace for entry {offset}, with name '{name}'"
+        )?;
+        Ok(NamespacedName::namespaced(namespace, name))
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub struct Namespace(Vec<NamespaceSegment>);
-#[derive(Clone, PartialEq, Eq)]
-pub enum NamespaceSegment {
-    Namespace(Arc<str>),
-    Type(Goff),
+#[derive(Clone, PartialEq, Eq, Hash, DebugCustom, Serialize, Deserialize)]
+#[debug("{}", self)]
+pub struct NamespacedName(Namespace, ArcStr);
+impl NamespacedName {
+    pub fn unnamespaced(name: &str) -> Self {
+        Self(Default::default(), name.into())
+    }
+
+    pub fn namespaced(namespace: &Namespace, name: &str) -> Self {
+        Self(namespace.clone(), name.into())
+    }
+
+    pub fn basename(&self) -> &str {
+        &self.1
+    }
+    
+    pub fn basename_owned(&self) -> Arc<str> {
+        Arc::clone(&self.1)
+    }
+
+    pub fn namespace(&self) -> &[NameSeg] {
+        self.0.0.as_slice()
+    }
+
+    /// Convert the namespaced name to string that can be used as a type
+    /// in CPP. If the namespace involves a subprogram, Err is returned
+    pub fn to_cpp_typedef_source(&self) -> cu::Result<String> {
+        let mut s = String::new();
+        for n in self.namespace() {
+            if let Some(x) = n.to_cpp_source()? {
+                if !s.is_empty() {
+                    s.push_str("::");
+                }
+                s.push_str(x);
+            }
+        }
+        if !s.is_empty() {
+            s.push_str("::");
+        }
+        s.push_str(&self.1);
+        Ok(s)
+    }
+}
+impl std::fmt::Display for NamespacedName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_empty() {
+            self.1.fmt(f)
+        } else {
+            write!(f, "{}::{}", self.0, self.1)
+        }
+    }
+}
+
+#[derive(Default, Clone, PartialEq, Eq, Hash, DebugCustom, Serialize, Deserialize)]
+#[debug("{}", self)]
+pub struct Namespace(Vec<NameSeg>);
+impl Namespace {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+#[derive(Default, Clone, PartialEq, Eq, Hash, DebugCustom, Serialize, Deserialize)]
+pub struct NamespaceLiteral(Vec<ArcStr>);
+impl NamespaceLiteral {
+    pub fn parse(name: &str) -> cu::Result<Self> {
+        let parts: Vec<ArcStr> = name.split("::").map(|x| x.trim().into()).collect();
+        cu::ensure!(!parts.is_empty(), "namespaced name must be non-empty");
+        Ok(Self(parts))
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Display, DebugCustom, Serialize, Deserialize)]
+pub enum NameSeg {
+    #[display("{}", _0)]
+    #[debug("{}", _0)]
+    Name(ArcStr),
+
+    #[display("[ty={}]", _0)]
+    #[debug("[ty={}]", _0)]
+    Type(Goff, ArcStr),
+
+    #[display("[subprogram={}]", _0)]
+    #[debug("[subprogram={}]", _0)]
     Subprogram(Goff),
-    Anonymous(usize),
+
+    #[display("[anonymous]")]
+    #[debug("[anonymous]")]
+    Anonymous,
 }
-impl std::fmt::Display for Namespace {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut iter = self.0.iter();
-        let Some(first) = iter.next() else {
-            return Ok(());
-        };
-        write!(f, "{first}");
-        for n in iter {
-            write!(f, "::{n}");
-        }
-        Ok(())
-    }
-}
-impl std::fmt::Debug for Namespace {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self}")
-    }
-}
-impl std::fmt::Display for NamespaceSegment {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+
+impl NameSeg {
+    pub fn to_cpp_source(&self) -> cu::Result<Option<&str>> {
         match self {
-            NamespaceSegment::Namespace(n) => n.fmt(f),
-            NamespaceSegment::Type(goff) => write!(f, "[[ty={goff}]]"),
-            NamespaceSegment::Subprogram(goff) => write!(f, "[[subprogram={goff}]]"),
-            NamespaceSegment::Anonymous(i) => write!(f, "[[anonymous={i}]]"),
+            NameSeg::Name(s) => Ok(Some(s.as_ref())),
+            NameSeg::Type(_, s) => Ok(Some(s.as_ref())),
+            NameSeg::Subprogram(_) => {
+                cu::bail!("to_cpp_source does not support subprogram as namespace");
+            }
+            NameSeg::Anonymous => Ok(None)
         }
-    }
-}
-impl std::fmt::Debug for NamespaceSegment {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self}")
     }
 }
 
@@ -213,10 +226,10 @@ static ANONYMOUS_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Default)]
 struct NamespaceStack {
-    stack: Vec<NamespaceSegment>,
+    stack: Vec<NameSeg>,
 }
 impl NamespaceStack {
-    pub fn push(&mut self, s: NamespaceSegment) {
+    pub fn push(&mut self, s: NameSeg) {
         self.stack.push(s);
     }
 
@@ -227,4 +240,21 @@ impl NamespaceStack {
     pub fn curr(&self) -> Namespace {
         Namespace(self.stack.clone())
     }
+}
+
+#[rustfmt::skip]
+mod __detail {
+    use super::*;
+    impl std::fmt::Display for Namespace { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut iter = self.0.iter();
+        let Some(first) = iter.next() else { return Ok(()); };
+        write!(f, "{first}")?; for n in iter { write!(f, "::{n}")?; }
+        Ok(())
+    } }
+    impl std::fmt::Display for NamespaceLiteral { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut iter = self.0.iter();
+        let Some(first) = iter.next() else { return Ok(()); };
+        write!(f, "{first}")?; for n in iter { write!(f, "::{n}")?; }
+        Ok(())
+    } }
 }
