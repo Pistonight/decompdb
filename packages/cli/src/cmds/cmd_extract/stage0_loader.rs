@@ -224,18 +224,27 @@ fn load_subroutine_types_from_entry(entry: &Die<'_, '_>, allow_other_tags: bool)
 
 fn load_enum_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu::Result<Type0> {
     let offset = entry.goff();
-    let name = cu::check!(
-        entry.qual_name_opt(&ctx.nsmaps),
-        "failed to get enum name at {offset}"
-    )?;
     let is_decl = cu::check!(
         entry.flag(DW_AT_declaration),
         "failed to check if enum is declaration at {offset}"
     )?;
     if is_decl {
-        let name = cu::check!(name, "unexpected enum decl without name at {offset}")?;
-        return Ok(Type0::EnumDecl(name));
+        // keep the templates for resolution
+        let name = cu::check!(
+            entry.qual_name(&ctx.nsmaps),
+            "failed to get enum decl name at {offset}"
+        )?;
+        let decl_namespace = cu::check!(ctx.nsmaps.namespaces.get(&offset),
+            "failed to get namespace for enum decl at {offset}")?;
+        return Ok(Type0::EnumDecl(decl_namespace.clone(), name));
     }
+    // remove templates from name for definition,
+    // since we get those from DWARF nodes
+    let name = cu::check!(
+        entry.untemplated_qual_name_opt(&ctx.nsmaps),
+        "failed to get enum name at {offset}"
+    )?;
+
     let byte_size_or_base = match cu::check!(entry.loff_opt(DW_AT_type), "failed to get enum base type at {offset}")? {
         None => {
             // does not have base, check byte size
@@ -291,7 +300,9 @@ fn load_union_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu:
             entry.qual_name(&ctx.nsmaps),
             "failed to get union decl name at {offset}"
         )?;
-        return Ok(Type0::UnionDecl(name));
+        let decl_namespace = cu::check!(ctx.nsmaps.namespaces.get(&offset),
+            "failed to get namespace for union decl at {offset}")?;
+        return Ok(Type0::UnionDecl(decl_namespace.clone(), name));
     }
     // remove templates from name for definition,
     // since we get those from DWARF nodes
@@ -387,7 +398,9 @@ fn load_struct_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu
             entry.qual_name(&ctx.nsmaps),
             "failed to get struct decl name at {offset}"
         )?;
-        return Ok(Type0::StructDecl(name));
+        let decl_namespace = cu::check!(ctx.nsmaps.namespaces.get(&offset),
+            "failed to get namespace for struct decl at {offset}")?;
+        return Ok(Type0::StructDecl(decl_namespace.clone(), name));
     }
     // remove templates from name for definition,
     // since we get those from DWARF nodes

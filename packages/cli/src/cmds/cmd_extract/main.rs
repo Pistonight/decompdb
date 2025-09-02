@@ -97,11 +97,12 @@ async fn run_internal(config: Config) -> cu::Result<()> {
     };
 
     let stage1 = {
-        let bar = cu::progress_bar(stage0.len(), "stage0 -> stage1: parsing type names");
+        let bar = cu::progress_bar(stage0.len(), "stage0 -> stage1: parsing types");
         for (i, stage0) in stage0.into_iter().enumerate() {
-            cu::progress!(&bar, i, "{}", stage0.name);
-            let command = cu::check!(compile_commands.get(&stage0.name), "cannot find compile command for {}", stage0.name)?;
-            let stage1 = stage0_clang_parse::parse_type(stage0, command).await?;
+            let name = stage0.name.clone();
+            cu::progress!(&bar, i, "{name}");
+            let command = cu::check!(compile_commands.get(&name), "cannot find compile command for {name}")?;
+            let stage1 = cu::check!(stage0_clang_parse::parse_type(stage0, command).await, "failed to parse types for {name}")?;
         }
     };
 

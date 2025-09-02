@@ -274,11 +274,11 @@ impl<T: Serialize> Tree<T> {
     }
 }
 
-impl<'de, T: Deserialize<'de> + TreeRepr> Deserialize<'de> for Tree<T> {
+impl<'de, T: TreeRepr> Deserialize<'de> for Tree<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         return deserializer.deserialize_seq(Visitor(std::marker::PhantomData));
         struct Visitor<T>(std::marker::PhantomData<T>);
-        impl<'de, T: Deserialize<'de> + TreeRepr> serde::de::Visitor<'de> for Visitor<T> {
+        impl<'de, T: TreeRepr> serde::de::Visitor<'de> for Visitor<T> {
             type Value = Tree<T>;
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -288,8 +288,13 @@ impl<'de, T: Deserialize<'de> + TreeRepr> Deserialize<'de> for Tree<T> {
                 self,
                 mut seq: A,
             ) -> Result<Self::Value, A::Error> {
-                let Some(base) = seq.next_element::<T>()? else {
+                let Some(base_spec) = seq.next_element::<&str>()? else {
                     return Err(serde::de::Error::custom("missing base type in TyYAML TYPE"));
+                };
+                let Some(base) = T::deserialize_spec(base_spec) else {
+                    return Err(serde::de::Error::custom(
+                        "malformated TreeRepr in TyYAML TYPE",
+                    ));
                 };
                 self.continue_visit(seq, Tree::Base(base))
             }
@@ -300,7 +305,7 @@ impl<'de, T: Deserialize<'de> + TreeRepr> Deserialize<'de> for Tree<T> {
             Str(&'a str),
             Len([u32; 1]),
         }
-        impl<'de, T: Deserialize<'de> + TreeRepr> Visitor<T> {
+        impl<'de, T: TreeRepr> Visitor<T> {
             fn continue_visit<A: serde::de::SeqAccess<'de>>(
                 self,
                 mut seq: A,
@@ -381,13 +386,13 @@ impl<'de, T: Deserialize<'de> + TreeRepr> Deserialize<'de> for Tree<T> {
             }
         }
         struct SubroutineVec<T>(Vec<Tree<T>>);
-        impl<'de, T: Deserialize<'de> + TreeRepr> Deserialize<'de> for SubroutineVec<T> {
+        impl<'de, T: TreeRepr> Deserialize<'de> for SubroutineVec<T> {
             fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
                 deserializer.deserialize_seq(SubroutineVecVisitor(std::marker::PhantomData))
             }
         }
         struct SubroutineVecVisitor<T>(std::marker::PhantomData<T>);
-        impl<'de, T: Deserialize<'de> + TreeRepr> serde::de::Visitor<'de> for SubroutineVecVisitor<T> {
+        impl<'de, T: TreeRepr> serde::de::Visitor<'de> for SubroutineVecVisitor<T> {
             type Value = SubroutineVec<T>;
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 write!(f, "subroutine parameters in a TyYAML TYPE")

@@ -7,8 +7,8 @@ use super::pre::*;
 use crate::serde_impl::ArcStr;
 
 pub struct NamespaceMaps {
-    qualifiers: GoffMap<Namespace>,
-    namespaces: GoffMap<Namespace>,
+    pub qualifiers: GoffMap<Namespace>,
+    pub namespaces: GoffMap<Namespace>,
 }
 
 /// Load the namespaces in this compilation unit as a global offset map
@@ -157,15 +157,7 @@ impl NamespacedName {
     /// Convert the namespaced name to string that can be used as a type
     /// in CPP. If the namespace involves a subprogram, Err is returned
     pub fn to_cpp_typedef_source(&self) -> cu::Result<String> {
-        let mut s = String::new();
-        for n in &self.namespace().0 {
-            if let Some(x) = n.to_cpp_source()? {
-                if !s.is_empty() {
-                    s.push_str("::");
-                }
-                s.push_str(x);
-            }
-        }
+        let mut s = self.namespace().to_cpp_typedef_source()?;
         if !s.is_empty() {
             s.push_str("::");
         }
@@ -190,9 +182,21 @@ impl Namespace {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+    pub fn to_cpp_typedef_source(&self) -> cu::Result<String> {
+        let mut s = String::new();
+        for n in &self.0 {
+            if let Some(x) = n.to_cpp_source()? {
+                if !s.is_empty() {
+                    s.push_str("::");
+                }
+                s.push_str(x);
+            }
+        }
+        Ok(s)
+    }
 }
 
-#[derive(Default, Clone, PartialEq, Eq, Hash, DebugCustom, Deserialize)]
+#[derive(Default, Clone, PartialEq, Eq, Hash, DebugCustom)]
 pub struct NamespaceLiteral(Vec<ArcStr>);
 impl NamespaceLiteral {
     pub fn new(name: &str) -> Self {

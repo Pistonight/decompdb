@@ -160,17 +160,17 @@ pub enum Type0 {
     Enum(Option<NamespacedName>, Type0Enum),
     /// Declaration of an enum. 
     /// Name includes template args
-    EnumDecl(NamespacedName),
+    EnumDecl(Namespace, NamespacedName),
     /// Union. The name does not include template args. could be anonymous
     Union(Option<NamespacedName>, Type0Union),
     /// Declaration of union. 
     /// Name includes template args
-    UnionDecl(NamespacedName),
+    UnionDecl(Namespace, NamespacedName),
     /// Struct or Class. The name does not include template args. could be anonymous
     Struct(Option<NamespacedName>, Type0Struct),
     /// Declaration of struct or class. 
     /// Name includes template args
-    StructDecl(NamespacedName),
+    StructDecl(Namespace, NamespacedName),
     /// Composition of other types
     Tree(Tree<Goff>),
     /// Alias to another type for type layout purpose (basically typedef without a name)

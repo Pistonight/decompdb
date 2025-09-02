@@ -3,13 +3,6 @@ version: '3'
 tasks:
   test:
     cmds:
-        # -Xclang -ast-dump=json
-          # clang++
-        # -xc++
-      # -Xclang -emit-ast
-        # -ast-dump
-        # -fsyntax-only
-      # /home/piston/dev/botw-decomp/toolchain/clang-4.0.1/bin/clang
       - cmd: >
-          /usr/bin/clang '-Xclang' '-ast-dump=json' '-fsyntax-only' '/home/piston/dev/decompdb/packages/cli/dejj/clang-type-parse/gfx_Shader-api.nvn.8.cpp_877355fa5578d0f0.cpp' '-I/home/piston/dev/botw-decomp/toolchain/clang-4.0.1/include/c++/v1' '--target=aarch64-linux-elf' '--sysroot=/home/piston/dev/botw-decomp/toolchain/musl' '-DNN_SDK_MAJOR=4' '-DNN_SDK_MINOR=4' '-DNN_SDK_PATCH=0' '-DNN_SDK_TYPE="Release"' '-DNN_WARE_MAJOR=1' '-DNN_WARE_MINOR=6' '-DNN_WARE_PATCH=1' '-DUKING_NX_V150' '-I/home/piston/dev/botw-decomp/lib/NintendoSDK/include' '-I/home/piston/dev/botw-decomp/lib/NintendoSDK/src/NintendoSDK' '-O3' '-g' '-std=c++1z' '-D' 'SWITCH' '-D' 'NNSDK' '-D' 'MATCHING_HACK_NX_CLANG' '-D' 'SWITCH' '-D' 'NNSDK' '-D' 'MATCHING_HACK_NX_CLANG' '-mcpu=cortex-a57+fp+simd+crypto+crc' '-mno-implicit-float' '-stdlib=libc++' '-fPIC' '-fstandalone-debug' '-fcolor-diagnostics' '-Wno-unused-command-line-argument' '-fdebug-prefix-map=/tmp=/home/piston/dev/botw-decomp/build' '-fno-strict-aliasing' '-fno-exceptions' '-Wall' '-Wextra' '-Wno-invalid-offsetof'
+          clang -Xclang '-ast-dump=json' -fsyntax-only /home/piston/dev/decompdb/packages/cli/dejj/clang-type-parse/seadController.cpp_7119ed835a094809.cpp -I/home/piston/dev/botw-decomp/toolchain/clang-4.0.1/include/c++/v1 '--target=aarch64-linux-elf' '--sysroot=/home/piston/dev/botw-decomp/toolchain/musl' -DUKING_NX_V150 -I/home/piston/dev/botw-decomp/lib/sead/include -I/home/piston/dev/botw-decomp/lib/NintendoSDK/include -O3 -g '-std=c++1z' -D SWITCH -D NNSDK -D MATCHING_HACK_NX_CLANG -D SWITCH -D NNSDK -D MATCHING_HACK_NX_CLANG '-mcpu=cortex-a57+fp+simd+crypto+crc' -mno-implicit-float '-stdlib=libc++' -fPIC -fstandalone-debug -fcolor-diagnostics -Wno-unused-command-line-argument '-fdebug-prefix-map=/tmp=/home/piston/dev/botw-decomp/build' -fno-exceptions -fno-strict-aliasing -Wall -Wextra -Wdeprecated -Wno-invalid-offsetof
           | bun post.ts > out.json
