@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use cu::pre::*;
-use tyyaml::{Prim, Tree};
+use tyyaml::{Prim, Tree, TreeRepr};
 
 use crate::config::Config;
 
@@ -175,25 +175,6 @@ pub enum Type0 {
     Tree(Tree<Goff>),
     /// Alias to another type for type layout purpose (basically typedef without a name)
     Alias(Goff),
-}
-
-impl Type0 {
-    pub fn fmt_cpp_name(&self, map: &GoffMap<Type0>) -> cu::Result<String> {
-        match self {
-            Type0::Prim(prim) => todo!(),
-            Type0::Typedef(namespaced_name, goff) => todo!(),
-            Type0::Enum(namespaced_name, type0_enum) => todo!(),
-            Type0::EnumDecl(namespaced_name) => todo!(),
-            Type0::Union(namespaced_name, type0_union) => todo!(),
-            Type0::UnionDecl(namespaced_name) => todo!(),
-            Type0::Struct(namespaced_name, type0_struct) => todo!(),
-            Type0::StructDecl(namespaced_name) => todo!(),
-            Type0::Tree(tree) => todo!(),
-            Type0::Alias(goff) => todo!(),
-        }
-
-
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -489,23 +470,49 @@ pub struct NamespacedTemplatedName {
     /// The untemplated base name (with namespace)
     pub base: NamespacedName,
     /// The template types
-    pub templates: Vec<TemplateArg<NamespaceLiteral>>,
+    pub templates: Vec<TemplateArg<NamespacedTemplatedArg>>,
 }
 impl NamespacedTemplatedName {
     pub fn new(base: &NamespacedName) -> Self {
         Self {base: base.clone(), templates: vec![]}
     }
 }
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct NamespacedTemplatedArg {
+    /// The untemplated base name (with namespace)
+    pub base: Tree<NamespaceLiteral>,
+    /// The template types
+    pub templates: Vec<TemplateArg<NamespacedTemplatedArg>>,
+}
+impl NamespacedTemplatedArg {
+    pub fn new(base: Tree<NamespaceLiteral>) -> Self {
+        Self {base, templates: vec![]}
+    }
+    pub fn with_templates(base: Tree<NamespaceLiteral>, templates: Vec<TemplateArg<Self>>) -> Self {
+        Self {base, templates}
+    }
+}
+impl TreeRepr for NamespaceLiteral {
+    fn void() -> Self {
+        NamespaceLiteral::new("void")
+    }
+
+    fn deserialize_spec(spec: &str) -> Option<Self> {
+        Self::parse(spec).ok()
+    }
+}
+
 
 
 #[derive(Clone, PartialEq, Eq, Hash, Display, DebugCustom, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum TemplateArg<T> {
     // Constant value. Could also be boolean (0=false, 1=true)
     #[display("{}", _0)]
-    #[debug("{}", _0)]
+    #[debug("{:?}", _0)]
     Const(i64),
     #[display("{}", _0)]
-    #[debug("{}", _0)]
+    #[debug("{:?}", _0)]
     Type(T),
 }
 

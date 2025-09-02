@@ -4,8 +4,8 @@ use cu::pre::*;
 
 use tyyaml::Prim;
 
-mod extract_resolution;
-pub use extract_resolution::*;
+mod extract;
+pub use extract::*;
 
 use crate::serde_impl::Regex;
 
@@ -17,14 +17,14 @@ pub fn load(path: impl AsRef<Path>) -> cu::Result<Config> {
 
     let base = path.parent_abs()?;
     let base_rel = base.try_to_rel();
-    resolve_path(&base_rel, &mut config.paths.elf);
-    resolve_path(&base_rel, &mut config.paths.extract_output);
-    resolve_path(&base_rel, &mut config.paths.compdb);
-    config.paths.system_header_paths.iter_mut().for_each(|x| {
-        resolve_path(&base_rel, x);
-    });
-    resolve_path(&base_rel, &mut config.paths.functions_csv.path);
-    resolve_path(&base_rel, &mut config.paths.data_csv.path);
+    resolve_path(&base_rel, &mut config.paths.elf)?;
+    resolve_path(&base_rel, &mut config.paths.extract_output)?;
+    resolve_path(&base_rel, &mut config.paths.compdb)?;
+    config.paths.system_header_paths.iter_mut().map(|x| {
+        resolve_path(&base_rel, x)
+    }).collect::<Result<Vec<_>, _>>()?;
+    resolve_path(&base_rel, &mut config.paths.functions_csv.path)?;
+    resolve_path(&base_rel, &mut config.paths.data_csv.path)?;
 
     config.extract.name_resolution.test_rules()?;
     match config.extract.pointer_width {
@@ -54,61 +54,6 @@ pub struct Config {
     pub extract: CfgExtract,
 }
 
-/// Config for extract
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub struct CfgExtract {
-    /// Pointer width for the target platform, must be 8, 16, 32 or 64
-    pub pointer_width: u8,
-    /// Representation of PTMD, as an array of primitive
-    pub ptmd_repr: (Prim, u32),
-    /// Representation of PTMF, as an array of primitive
-    pub ptmf_repr: (Prim, u32),
-    /// Rules for resolving type names
-    pub name_resolution: CfgExtractResolution,
-    /// Regex for the virtual function pointer field
-    pub vfptr_field_regex: Regex,
-}
-
-impl CfgExtract {
-    /// Get the primitive equivalent of a pointer type
-    pub fn pointer_type(&self) -> cu::Result<Prim> {
-        let pointer_type = match self.pointer_width {
-            8 => Prim::U8,
-            16 => Prim::U16,
-            32 => Prim::U32,
-            64 => Prim::U64,
-            x => cu::bail!("invalid pointer width in config: {x}"),
-        };
-        Ok(pointer_type)
-    }
-
-    /// Get the byte size of the pointer
-    pub fn pointer_size(&self) -> cu::Result<u32> {
-        let size = match self.pointer_width {
-            8 => 1,
-            16 => 2,
-            32 => 4,
-            64 => 8,
-            x => cu::bail!("invalid pointer width in config: {x}"),
-        };
-        Ok(size)
-    }
-
-    pub fn ptmd_size(&self) -> cu::Result<u32> {
-        let mut size = cu::check!(self.ptmd_repr.0.byte_size(), "invalid unsized ptmd repr in config")?;
-        size *= self.ptmd_repr.1;
-        cu::ensure!(size != 0, "invalid zero-sized ptmd repr in config");
-        Ok(size)
-    }
-
-    pub fn ptmf_size(&self) -> cu::Result<u32> {
-        let mut size = cu::check!(self.ptmf_repr.0.byte_size(), "invalid unsized ptmf repr in config")?;
-        size *= self.ptmf_repr.1;
-        cu::ensure!(size != 0, "invalid zero-sized ptmf repr in config");
-        Ok(size)
-    }
-}
 
 /// Config for project paths
 ///
@@ -155,8 +100,9 @@ pub struct CfgCsv {
     pub symbol_column: usize,
 }
 
-fn resolve_path(base: &Path, path: &mut PathBuf) {
+fn resolve_path(base: &Path, path: &mut PathBuf) -> cu::Result<()> {
     if !path.is_absolute() {
-        *path = base.join(&path);
+        *path = base.join(&path).normalize()?;
     }
+    Ok(())
 }

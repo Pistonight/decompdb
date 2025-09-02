@@ -9,13 +9,13 @@ use super::pre::*;
 use super::type_structure::*;
 
 /// Load the type data from DWARF units
-pub fn load_types(unit: &Unit, config: Arc<Config>, namespaces: GoffMap<Namespace>) -> cu::Result<TypeStage0> {
+pub fn load_types(unit: &Unit, config: Arc<Config>, nsmaps: NamespaceMaps) -> cu::Result<TypeStage0> {
     let pointer_type = config.extract.pointer_type()?;
     let mut ctx = LoadTypeCtx {
         pointer_type,
         config,
         types: Default::default(),
-        namespaces,
+        nsmaps,
     };
     cu::debug!("loading types for {unit}");
     cu::check!(load_types_root(unit, &mut ctx), "failed to load types for {unit}")?;
@@ -70,14 +70,32 @@ fn load_type_at<'a, 'b>(node: DieNode<'a, 'b>, ctx: &mut LoadTypeCtx) -> cu::Res
                 None => Type0::Prim(Prim::Void),
                 Some(loff) => {
                     let typedef_name = cu::check!(
-                        entry.namespaced_name(&ctx.namespaces),
+                        entry.qual_name(&ctx.nsmaps),
                         "failed to read name of the typedef at {offset}"
                     )?;
                     // note: typedef name could be templated with using
                     // for example:
                     // template <bool __b>
                     // using bool_constant = integral_constant<bool, __b>;
-                    Type0::Typedef(typedef_name, entry.to_global(loff))
+                    let mut abandon = false;
+                    match typedef_name.to_cpp_typedef_source() {
+                        Ok(cpp_name) => {
+                            for r in &ctx.config.extract.type_parser.abandon_typedefs {
+                                if r.is_match(&cpp_name) {
+                                    abandon = true;
+                                    break;
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            abandon = true;
+                        }
+                    }
+                    if abandon {
+                        Type0::Alias(entry.to_global(loff))
+                    } else {
+                        Type0::Typedef(typedef_name, entry.to_global(loff))
+                    }
                 }
             }
         }
@@ -207,7 +225,7 @@ fn load_subroutine_types_from_entry(entry: &Die<'_, '_>, allow_other_tags: bool)
 fn load_enum_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu::Result<Type0> {
     let offset = entry.goff();
     let name = cu::check!(
-        entry.namespaced_name_opt(&ctx.namespaces),
+        entry.qual_name_opt(&ctx.nsmaps),
         "failed to get enum name at {offset}"
     )?;
     let is_decl = cu::check!(
@@ -263,18 +281,24 @@ fn load_enum_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu::
 
 fn load_union_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu::Result<Type0> {
     let offset = entry.goff();
-    let name = cu::check!(
-        entry.namespaced_untemplated_name_opt(&ctx.namespaces),
-        "failed to get union name at {offset}"
-    )?;
     let is_decl = cu::check!(
         entry.flag(DW_AT_declaration),
         "failed to check if union is declaration at {offset}"
     )?;
     if is_decl {
-        let name = cu::check!(name, "unexpected union decl without name at {offset}")?;
+        // keep the templates for resolution
+        let name = cu::check!(
+            entry.qual_name(&ctx.nsmaps),
+            "failed to get union decl name at {offset}"
+        )?;
         return Ok(Type0::UnionDecl(name));
     }
+    // remove templates from name for definition,
+    // since we get those from DWARF nodes
+    let name = cu::check!(
+        entry.untemplated_qual_name_opt(&ctx.nsmaps),
+        "failed to get union name at {offset}"
+    )?;
 
     let byte_size = cu::check!(entry.uint(DW_AT_byte_size), "failed to get union byte size at {offset}")?;
     if byte_size > u32::MAX as u64 {
@@ -353,18 +377,24 @@ fn load_union_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu:
 
 fn load_struct_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu::Result<Type0> {
     let offset = entry.goff();
-    let name = cu::check!(
-        entry.namespaced_untemplated_name_opt(&ctx.namespaces),
-        "failed to get struct name at {offset}"
-    )?;
     let is_decl = cu::check!(
         entry.flag(DW_AT_declaration),
         "failed to check if struct is declaration at {offset}"
     )?;
     if is_decl {
-        let name = cu::check!(name, "unexpected struct decl without name at {offset}")?;
+        // keep the templates for resolution
+        let name = cu::check!(
+            entry.qual_name(&ctx.nsmaps),
+            "failed to get struct decl name at {offset}"
+        )?;
         return Ok(Type0::StructDecl(name));
     }
+    // remove templates from name for definition,
+    // since we get those from DWARF nodes
+    let name = cu::check!(
+        entry.untemplated_qual_name_opt(&ctx.nsmaps),
+        "failed to get struct name at {offset}"
+    )?;
 
     let byte_size = cu::check!(
         entry.uint(DW_AT_byte_size),
@@ -650,5 +680,5 @@ struct LoadTypeCtx {
     pointer_type: Prim,
     config: Arc<Config>,
     types: GoffMap<Type0>,
-    namespaces: GoffMap<Namespace>,
+    nsmaps: NamespaceMaps
 }

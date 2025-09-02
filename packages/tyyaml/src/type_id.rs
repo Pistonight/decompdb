@@ -1,5 +1,7 @@
 use cu::pre::*;
 
+use crate::TreeRepr;
+
 /// A TyYAML Type ID, which is either a primitive type ([`Prim`]),
 /// or a named type.
 ///
@@ -26,6 +28,22 @@ impl Ty {
             Self::Prim(ty) => write!(buf, "{ty}").unwrap(),
             Self::Named(ty) => write!(buf, "'\"{ty}\"'").unwrap(),
         }
+    }
+}
+
+impl TreeRepr for Ty {
+    fn void() -> Self {
+        Self::Prim(Prim::Void)
+    }
+
+    fn deserialize_spec(spec: &str) -> Option<Self> {
+        if spec.starts_with('"') {
+            if !spec.ends_with('"') {
+                return None;
+            }
+            return Some(Ty::Named(spec[1..spec.len() - 1].to_string()));
+        }
+        Prim::from_str(spec).map(Self::Prim)
     }
 }
 
@@ -59,19 +77,12 @@ impl<'de> Deserialize<'de> for Ty {
             where
                 E: serde::de::Error,
             {
-                if v.starts_with('"') {
-                    if !v.ends_with('"') {
-                        return Err(serde::de::Error::custom(
-                            "malformated TYPE_ID in TyYAML TYPE",
-                        ));
-                    }
-                    return Ok(Ty::Named(v[1..v.len() - 1].to_string()));
-                }
-                match Prim::from_str(v) {
-                    Some(ty) => Ok(Ty::Prim(ty)),
-                    None => Err(serde::de::Error::custom(
+                match Ty::deserialize_spec(v) {
+                    Some(x) => Ok(x),
+                    None => 
+                    Err(serde::de::Error::custom(
                         "malformated TYPE_ID in TyYAML TYPE",
-                    )),
+                    ))
                 }
             }
         }

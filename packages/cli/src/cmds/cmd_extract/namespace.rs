@@ -1,72 +1,89 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::Arc;
 
 use cu::pre::*;
 
-use crate::serde_impl::ArcStr;
-
 use super::pre::*;
 
+use crate::serde_impl::ArcStr;
+
+pub struct NamespaceMaps {
+    qualifiers: GoffMap<Namespace>,
+    namespaces: GoffMap<Namespace>,
+}
+
 /// Load the namespaces in this compilation unit as a global offset map
-pub fn load_namespaces(unit: &Unit) -> cu::Result<GoffMap<Namespace>> {
+pub fn load_namespaces(unit: &Unit) -> cu::Result<NamespaceMaps> {
     cu::debug!("loading namespaces for {unit}");
-    let mut namespace = NamespaceStack::default();
-    let mut offset_to_ns = GoffMap::new();
+    let mut ctx = LoadNamespaceCtx::default();
     cu::check!(
-        load_namespaces_root(unit, &mut namespace, &mut offset_to_ns),
+        load_namespaces_root(unit, &mut ctx),
         "failed to load namespaces for {unit}"
     )?;
-    cu::debug!("loaded {} namespaces for {unit}", offset_to_ns.len());
-    Ok(offset_to_ns)
+    Ok(NamespaceMaps { qualifiers: ctx.offset_to_qual, namespaces: ctx.offset_to_ns })
 }
 
 fn load_namespaces_root(
     unit: &Unit,
-    namespace: &mut NamespaceStack,
-    offset_to_ns: &mut GoffMap<Namespace>,
+    ctx: &mut LoadNamespaceCtx
 ) -> cu::Result<()> {
     let mut tree = unit.tree()?;
     let root = tree.root()?;
-    read_namespace_recur(root, namespace, offset_to_ns)?;
+    load_namespace_recur(root, ctx)?;
     Ok(())
 }
 
-fn read_namespace_recur(
+fn load_namespace_recur(
     node: DieNode<'_, '_>,
-    namespace: &mut NamespaceStack,
-    offset_to_ns: &mut GoffMap<Namespace>,
+    ctx: &mut LoadNamespaceCtx
 ) -> cu::Result<()> {
     let entry = node.entry();
     let offset = entry.goff();
     let tag = entry.tag();
     if is_type_tag(tag) {
-        let name = entry.name()?;
         // types could be defined inside a type
-        offset_to_ns.insert(offset, namespace.curr());
-        namespace.push(NameSeg::Type(offset, name.into()));
+        ctx.register_current_at_offset(offset);
+        // only push the qualifier stack for types
+        match entry.name_opt()? {
+            Some(name) => {
+                ctx.current_qualifier.push(NameSeg::Type(offset, name.into()));
+            }
+            None => {
+                ctx.current_qualifier.push(NameSeg::Anonymous);
+            }
+        }
+        node.for_each_child(|child| load_namespace_recur(child, ctx))?;
+        ctx.current_qualifier.pop();
     } else {
         match tag {
             // simply recurse
             DW_TAG_variable | DW_TAG_compile_unit => {
-                node.for_each_child(|child| read_namespace_recur(child, namespace, offset_to_ns))?;
+                node.for_each_child(|child| load_namespace_recur(child, ctx))?;
                 return Ok(());
             }
             // types could be defined inside a function
             DW_TAG_subprogram => {
-                offset_to_ns.insert(offset, namespace.curr());
-                namespace.push(NameSeg::Subprogram(offset));
+                ctx.register_current_at_offset(offset);
+                ctx.current_qualifier.push(NameSeg::Subprogram(offset));
+                node.for_each_child(|child| load_namespace_recur(child, ctx))?;
+                ctx.current_qualifier.pop();
             }
             DW_TAG_namespace => {
                 // doesn't need to add to map for namespace nodes
                 match entry.name_opt()? {
-                    Some(name) => namespace.push(NameSeg::Name(name.into())),
+                    Some(name) => {
+                        let seg = NameSeg::Name(name.into());
+                        ctx.current_qualifier.push(seg.clone());
+                        ctx.current_namespace.push(seg);
+                    }
                     None => {
                         // let id = ANONYMOUS_COUNT.fetch_add(1, Ordering::SeqCst);
-                        namespace.push(NameSeg::Anonymous)
+                        ctx.current_qualifier.push(NameSeg::Anonymous);
+                        ctx.current_namespace.push(NameSeg::Anonymous);
                     }
                 };
+                node.for_each_child(|child| load_namespace_recur(child, ctx))?;
+                ctx.current_qualifier.pop();
+                ctx.current_namespace.pop();
             }
             _ => {
                 // ignore
@@ -74,42 +91,39 @@ fn read_namespace_recur(
             }
         }
     }
-    // recurse into the node with pushed stack
-    node.for_each_child(|child| read_namespace_recur(child, namespace, offset_to_ns))?;
-    namespace.pop();
 
     Ok(())
 }
 impl Die<'_, '_> {
     /// Get the name of the entry with namespace prefix, without templated args
-    pub fn namespaced_untemplated_name(&self, namespaces: &GoffMap<Namespace>) -> cu::Result<NamespacedName> {
+    pub fn untemplated_qual_name(&self, namespaces: &NamespaceMaps) -> cu::Result<NamespacedName> {
         let name = self.untemplated_name()?;
-        Self::combine_namespace_and_name(namespaces, self.goff(), name)
+        Self::make_qual_name(namespaces, self.goff(), name)
     }
     /// Get the name of the entry with namespace prefix, without templated args
-    pub fn namespaced_untemplated_name_opt(&self, namespaces: &GoffMap<Namespace>) -> cu::Result<Option<NamespacedName>> {
+    pub fn untemplated_qual_name_opt(&self, nsmaps: &NamespaceMaps) -> cu::Result<Option<NamespacedName>> {
         let Some(name) = self.untemplated_name_opt()? else {
             return Ok(None);
         };
-        Self::combine_namespace_and_name(namespaces, self.goff(), name).map(Some)
+        Self::make_qual_name(nsmaps, self.goff(), name).map(Some)
     }
     /// Get the name of the entry with namespace prefix
-    pub fn namespaced_name(&self, namespaces: &GoffMap<Namespace>) -> cu::Result<NamespacedName> {
+    pub fn qual_name(&self, nsmaps: &NamespaceMaps) -> cu::Result<NamespacedName> {
         let name = self.name()?;
-        Self::combine_namespace_and_name(namespaces, self.goff(), name)
+        Self::make_qual_name(nsmaps, self.goff(), name)
     }
 
     /// Get the name of the entry with namespace prefix, optional
-    pub fn namespaced_name_opt(&self, namespaces: &GoffMap<Namespace>) -> cu::Result<Option<NamespacedName>> {
+    pub fn qual_name_opt(&self, nsmaps: &NamespaceMaps) -> cu::Result<Option<NamespacedName>> {
         let Some(name) = self.name_opt()? else {
             return Ok(None);
         };
-        Self::combine_namespace_and_name(namespaces, self.goff(), name).map(Some)
+        Self::make_qual_name(nsmaps, self.goff(), name).map(Some)
     }
 
-    fn combine_namespace_and_name(namespaces: &GoffMap<Namespace>, offset: Goff, name: &str) -> cu::Result<NamespacedName> {
+    fn make_qual_name(nsmaps: &NamespaceMaps, offset: Goff, name: &str) -> cu::Result<NamespacedName> {
         let namespace = cu::check!(
-            namespaces.get(&offset),
+            nsmaps.qualifiers.get(&offset),
             "cannot find namespace for entry {offset}, with name '{name}'"
         )?;
         Ok(NamespacedName::namespaced(namespace, name))
@@ -136,15 +150,15 @@ impl NamespacedName {
         Arc::clone(&self.1)
     }
 
-    pub fn namespace(&self) -> &[NameSeg] {
-        self.0.0.as_slice()
+    pub fn namespace(&self) -> &Namespace {
+        &self.0
     }
 
     /// Convert the namespaced name to string that can be used as a type
     /// in CPP. If the namespace involves a subprogram, Err is returned
     pub fn to_cpp_typedef_source(&self) -> cu::Result<String> {
         let mut s = String::new();
-        for n in self.namespace() {
+        for n in &self.namespace().0 {
             if let Some(x) = n.to_cpp_source()? {
                 if !s.is_empty() {
                     s.push_str("::");
@@ -178,9 +192,12 @@ impl Namespace {
     }
 }
 
-#[derive(Default, Clone, PartialEq, Eq, Hash, DebugCustom, Serialize, Deserialize)]
+#[derive(Default, Clone, PartialEq, Eq, Hash, DebugCustom, Deserialize)]
 pub struct NamespaceLiteral(Vec<ArcStr>);
 impl NamespaceLiteral {
+    pub fn new(name: &str) -> Self {
+        Self(vec![name.into()])
+    }
     pub fn parse(name: &str) -> cu::Result<Self> {
         let parts: Vec<ArcStr> = name.split("::").map(|x| x.trim().into()).collect();
         cu::ensure!(!parts.is_empty(), "namespaced name must be non-empty");
@@ -189,6 +206,7 @@ impl NamespaceLiteral {
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Display, DebugCustom, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum NameSeg {
     #[display("{}", _0)]
     #[debug("{}", _0)]
@@ -220,9 +238,27 @@ impl NameSeg {
     }
 }
 
-// used to make unique anonymous namespaces. These need to be completely
-// removed in the final output, so it's safe to make this not stable between runs
-static ANONYMOUS_COUNT: AtomicUsize = AtomicUsize::new(0);
+// // used to make unique anonymous namespaces. These need to be completely
+// // removed in the final output, so it's safe to make this not stable between runs
+// static ANONYMOUS_COUNT: AtomicUsize = AtomicUsize::new(0);
+//
+#[derive(Default)]
+struct LoadNamespaceCtx {
+    // the difference between qualifier and namespace
+    // is that qualifier contains types/subprograms,
+    // while namespace only contains namespaces
+    current_qualifier: NamespaceStack,
+    current_namespace: NamespaceStack,
+    offset_to_ns: GoffMap<Namespace>,
+    offset_to_qual: GoffMap<Namespace>,
+}
+
+impl LoadNamespaceCtx {
+    fn register_current_at_offset(&mut self, off: Goff) {
+        self.offset_to_qual.insert(off, self.current_qualifier.curr());
+        self.offset_to_ns.insert(off, self.current_namespace.curr());
+    }
+}
 
 #[derive(Default)]
 struct NamespaceStack {
@@ -257,4 +293,13 @@ mod __detail {
         write!(f, "{first}")?; for n in iter { write!(f, "::{n}")?; }
         Ok(())
     } }
+    impl Serialize for NamespaceLiteral {
+        fn serialize<
+        S: serde::Serializer 
+        >(&self, ser: S) -> Result<S::Ok, S::Error>
+        {
+            ser.serialize_str(&self.to_string())
+            
+        }
+    }
 }

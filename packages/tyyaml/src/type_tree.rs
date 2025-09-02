@@ -1,3 +1,5 @@
+use cu::pre::*;
+
 /// A Generic Type Tree
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Tree<Repr> {
@@ -155,6 +157,13 @@ impl<Repr> Tree<Repr> {
         }
     }
 }
+
+pub trait TreeRepr: Sized {
+    fn void() -> Self;
+    fn deserialize_spec(spec: &str) -> Option<Self>;
+}
+
+
 impl<Repr: std::fmt::Display> std::fmt::Display for Tree<Repr> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return match self {
@@ -211,6 +220,193 @@ impl<Repr: std::fmt::Display> std::fmt::Display for Tree<Repr> {
                 }
             }
             Ok(())
+        }
+    }
+}
+impl<T: Serialize> Serialize for Tree<T> {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq as _;
+        let mut seq = ser.serialize_seq(None)?;
+        self.serialize_internal(&mut seq)?;
+        seq.end()
+    }
+}
+#[doc(hidden)]
+impl<T: Serialize> Tree<T> {
+    fn serialize_internal<S: serde::ser::SerializeSeq>(&self, seq: &mut S) -> Result<(), S::Error> {
+        match self {
+            Tree::Base(ty) => seq.serialize_element(ty)?,
+            Tree::Array(ty, len) => {
+                ty.serialize_internal(seq)?;
+                seq.serialize_element(&[len])?;
+            }
+            Tree::Ptr(ty) => {
+                ty.serialize_internal(seq)?;
+                seq.serialize_element("*")?;
+            }
+            Tree::Sub(args) => {
+                let retty = args.get(0).expect("missing return type in subroutine type");
+                retty.serialize_internal(seq)?;
+
+                seq.serialize_element("()")?;
+                seq.serialize_element(&args[1..])?;
+            }
+            Tree::Ptmd(base, pointee) => {
+                pointee.serialize_internal(seq)?;
+                seq.serialize_element(base)?;
+                seq.serialize_element("::")?;
+                seq.serialize_element("*")?;
+            }
+            Tree::Ptmf(base, args) => {
+                let retty = args
+                    .get(0)
+                    .expect("missing return type in pointer-to-member-function type");
+                retty.serialize_internal(seq)?;
+
+                seq.serialize_element(base)?;
+                seq.serialize_element("::")?;
+                seq.serialize_element("()")?;
+                seq.serialize_element(&args[1..])?;
+                seq.serialize_element("*")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<'de, T: Deserialize<'de> + TreeRepr> Deserialize<'de> for Tree<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        return deserializer.deserialize_seq(Visitor(std::marker::PhantomData));
+        struct Visitor<T>(std::marker::PhantomData<T>);
+        impl<'de, T: Deserialize<'de> + TreeRepr> serde::de::Visitor<'de> for Visitor<T> {
+            type Value = Tree<T>;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "a TyYAML TYPE")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                let Some(base) = seq.next_element::<T>()? else {
+                    return Err(serde::de::Error::custom("missing base type in TyYAML TYPE"));
+                };
+                self.continue_visit(seq, Tree::Base(base))
+            }
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Spec<'a> {
+            Str(&'a str),
+            Len([u32; 1]),
+        }
+        impl<'de, T: Deserialize<'de> + TreeRepr> Visitor<T> {
+            fn continue_visit<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+                mut base: Tree<T>,
+            ) -> Result<Tree<T>, A::Error> {
+                'visit_loop: loop {
+                    let Some(spec) = seq.next_element::<Spec<'_>>()? else {
+                        return Ok(base);
+                    };
+                    let spec = match spec {
+                        Spec::Str(x) => x,
+                        Spec::Len(len) => {
+                            // array
+                            base = Tree::Array(Box::new(base), len[0]);
+                            continue 'visit_loop;
+                        }
+                    };
+                    // pointer
+                    if spec == "*" {
+                        base = Tree::Ptr(Box::new(base));
+                        continue 'visit_loop;
+                    }
+                    // subroutine
+                    if spec == "()" {
+                        let Some(SubroutineVec(mut args)) = seq.next_element()? else {
+                            return Err(serde::de::Error::custom(
+                                "missing parameter list in TyYAML subroutine TYPE",
+                            ));
+                        };
+                        *args
+                            .get_mut(0)
+                            .expect("missing return type in TyYAML subroutine") = base;
+
+                        base = Tree::Sub(args);
+                        continue 'visit_loop;
+                    }
+                    let Some(m) = T::deserialize_spec(spec) else {
+                        return Err(serde::de::Error::custom(
+                            "malformated TreeRepr in TyYAML TYPE",
+                        ));
+                    };
+                    if seq.next_element::<&str>()? != Some("::") {
+                        return Err(serde::de::Error::custom(
+                            "missing member spec ('::') in TyYAML pointer-to-member TYPE",
+                        ));
+                    }
+                    let Some(ptm_spec) = seq.next_element::<&str>()? else {
+                        return Err(serde::de::Error::custom(
+                            "missing spec after '::' in TyYAML pointer-to-member TYPE",
+                        ));
+                    };
+                    if ptm_spec == "*" {
+                        base = Tree::Ptmd(m, Box::new(base));
+                        continue 'visit_loop;
+                    }
+                    if ptm_spec == "()" {
+                        let Some(SubroutineVec(mut args)) = seq.next_element()? else {
+                            return Err(serde::de::Error::custom(
+                                "missing parameter list in TyYAML pointer-to-member-function TYPE",
+                            ));
+                        };
+                        *args
+                            .get_mut(0)
+                            .expect("missing return type in TyYAML pointer-to-member-function") =
+                            base;
+                        // consume the last ptr spec
+                        if seq.next_element::<&str>()? != Some("*") {
+                            return Err(serde::de::Error::custom(
+                                "missing pointer spec in TyYAML pointer-to-member-function TYPE",
+                            ));
+                        }
+
+                        base = Tree::Ptmf(m, args);
+                        continue 'visit_loop;
+                    }
+                    return Err(serde::de::Error::custom("malformed TyYAML TYPE"));
+                }
+            }
+        }
+        struct SubroutineVec<T>(Vec<Tree<T>>);
+        impl<'de, T: Deserialize<'de> + TreeRepr> Deserialize<'de> for SubroutineVec<T> {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                deserializer.deserialize_seq(SubroutineVecVisitor(std::marker::PhantomData))
+            }
+        }
+        struct SubroutineVecVisitor<T>(std::marker::PhantomData<T>);
+        impl<'de, T: Deserialize<'de> + TreeRepr> serde::de::Visitor<'de> for SubroutineVecVisitor<T> {
+            type Value = SubroutineVec<T>;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "subroutine parameters in a TyYAML TYPE")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut v = match seq.size_hint() {
+                    None => Vec::with_capacity(4),
+                    Some(x) => Vec::with_capacity(x + 1),
+                };
+                // push a dummy value to take space for the return value
+                v.push(Tree::Base(T::void()));
+                while let Some(base) = seq.next_element::<Tree<T>>()? {
+                    v.push(base);
+                }
+                Ok(SubroutineVec(v))
+            }
         }
     }
 }

@@ -1,5 +1,75 @@
 use cu::pre::*;
-use regex::Regex;
+use tyyaml::Prim;
+
+use crate::serde_impl::Regex;
+
+/// Config for extract
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CfgExtract {
+    /// Pointer width for the target platform, must be 8, 16, 32 or 64
+    pub pointer_width: u8,
+    /// Representation of PTMD, as an array of primitive
+    pub ptmd_repr: (Prim, u32),
+    /// Representation of PTMF, as an array of primitive
+    pub ptmf_repr: (Prim, u32),
+    /// Regex for the virtual function pointer field
+    pub vfptr_field_regex: Regex,
+    /// Rules for the type parser
+    pub type_parser: CfgExtractTypeParser,
+    /// Rules for resolving type names
+    pub name_resolution: CfgExtractResolution,
+}
+
+impl CfgExtract {
+    /// Get the primitive equivalent of a pointer type
+    pub fn pointer_type(&self) -> cu::Result<Prim> {
+        let pointer_type = match self.pointer_width {
+            8 => Prim::U8,
+            16 => Prim::U16,
+            32 => Prim::U32,
+            64 => Prim::U64,
+            x => cu::bail!("invalid pointer width in config: {x}"),
+        };
+        Ok(pointer_type)
+    }
+
+    /// Get the byte size of the pointer
+    pub fn pointer_size(&self) -> cu::Result<u32> {
+        let size = match self.pointer_width {
+            8 => 1,
+            16 => 2,
+            32 => 4,
+            64 => 8,
+            x => cu::bail!("invalid pointer width in config: {x}"),
+        };
+        Ok(size)
+    }
+
+    pub fn ptmd_size(&self) -> cu::Result<u32> {
+        let mut size = cu::check!(self.ptmd_repr.0.byte_size(), "invalid unsized ptmd repr in config")?;
+        size *= self.ptmd_repr.1;
+        cu::ensure!(size != 0, "invalid zero-sized ptmd repr in config");
+        Ok(size)
+    }
+
+    pub fn ptmf_size(&self) -> cu::Result<u32> {
+        let mut size = cu::check!(self.ptmf_repr.0.byte_size(), "invalid unsized ptmf repr in config")?;
+        size *= self.ptmf_repr.1;
+        cu::ensure!(size != 0, "invalid zero-sized ptmf repr in config");
+        Ok(size)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CfgExtractTypeParser {
+    /// If the fully-qualified typedef name matches these regexes,
+    /// the typedefed name will be abandoned, and the inner type (typedef target)
+    /// will be used instead of the typedef
+    #[serde(default)]
+    pub abandon_typedefs: Vec<Regex>,
+}
 
 /// Config for name resolution for the extract command
 #[derive(Debug, Clone, Deserialize)]
@@ -45,9 +115,9 @@ impl CfgExtractResolution {
 #[derive(Debug, Clone)]
 pub struct CfgExtractResolutionRules {
     /// Pattern for preferrence, from more preferred to less preferred
-    pub prefer: Vec<Regex>,
+    pub prefer: Vec<regex::Regex>,
     /// Pattern for dislikeness, from less disliked to more disliked
-    pub dislike: Vec<Regex>,
+    pub dislike: Vec<regex::Regex>,
 }
 
 impl CfgExtractResolutionRules {
@@ -83,7 +153,7 @@ impl<'de> Deserialize<'de> for CfgExtractResolutionRules {
                         is_parsing_prefer = false;
                         continue;
                     }
-                    let r = match Regex::new(s) {
+                    let r = match regex::Regex::new(s) {
                         Err(e) => {
                             return Err(serde::de::Error::custom(format!(
                                 "invalid regular expression '{s}': {e}"

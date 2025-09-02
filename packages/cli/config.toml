@@ -24,6 +24,14 @@ ptmd-repr = ["u64", 1]
 ptmf-repr = ["u64", 2]
 vfptr-field-regex = "^_vptr\\$"
 
+[extract.type-parser]
+abandon-typedefs = [
+    # these may have unparsable consteval expressions in the templates
+    "^std::__1::aligned_storage_t",
+    "^std::__1::conditional_t",
+    "^std::__1::add_pointer_t",
+]
+
 [extract.type-optimizer.pick-union-member]
 "uking::ui::PouchItem::Data" = "cook"
 "fpos_t" = "__opaque"
