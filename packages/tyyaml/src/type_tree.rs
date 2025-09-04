@@ -158,11 +158,14 @@ impl<Repr> Tree<Repr> {
     }
 }
 
-pub trait TreeRepr: Sized {
-    fn void() -> Self;
-    fn deserialize_spec(spec: &str) -> Option<Self>;
+pub trait TreeRepr: Sized + std::fmt::Debug + Clone + PartialEq + Eq + std::hash::Hash {
+    /// Serialize the type into a spec string for TyYAML
+    fn serialize_spec(&self) -> cu::Result<String>;
+    /// Deserialize void type
+    fn deserialize_void() -> Self;
+    /// Deserialize type from spec string
+    fn deserialize_spec(spec: &str) -> cu::Result<Self>;
 }
-
 
 impl<Repr: std::fmt::Display> std::fmt::Display for Tree<Repr> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -223,7 +226,7 @@ impl<Repr: std::fmt::Display> std::fmt::Display for Tree<Repr> {
         }
     }
 }
-impl<T: Serialize> Serialize for Tree<T> {
+impl<T: TreeRepr> Serialize for Tree<T> {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeSeq as _;
         let mut seq = ser.serialize_seq(None)?;
@@ -232,10 +235,20 @@ impl<T: Serialize> Serialize for Tree<T> {
     }
 }
 #[doc(hidden)]
-impl<T: Serialize> Tree<T> {
+impl<T: TreeRepr> Tree<T> {
     fn serialize_internal<S: serde::ser::SerializeSeq>(&self, seq: &mut S) -> Result<(), S::Error> {
+        use serde::ser::Error;
         match self {
-            Tree::Base(ty) => seq.serialize_element(ty)?,
+            Tree::Base(ty) => {
+                match ty.serialize_spec() {
+                    Ok(x) => seq.serialize_element(&x)?,
+                    Err(e) => {
+                        return Err(Error::custom(format!(
+                            "failed to serialize TreeRepr to spec: {e:?}"
+                        )));
+                    }
+                };
+            }
             Tree::Array(ty, len) => {
                 ty.serialize_internal(seq)?;
                 seq.serialize_element(&[len])?;
@@ -253,7 +266,14 @@ impl<T: Serialize> Tree<T> {
             }
             Tree::Ptmd(base, pointee) => {
                 pointee.serialize_internal(seq)?;
-                seq.serialize_element(base)?;
+                match base.serialize_spec() {
+                    Ok(x) => seq.serialize_element(&x)?,
+                    Err(e) => {
+                        return Err(Error::custom(format!(
+                            "failed to serialize TreeRepr to spec: {e:?}"
+                        )));
+                    }
+                };
                 seq.serialize_element("::")?;
                 seq.serialize_element("*")?;
             }
@@ -263,7 +283,14 @@ impl<T: Serialize> Tree<T> {
                     .expect("missing return type in pointer-to-member-function type");
                 retty.serialize_internal(seq)?;
 
-                seq.serialize_element(base)?;
+                match base.serialize_spec() {
+                    Ok(x) => seq.serialize_element(&x)?,
+                    Err(e) => {
+                        return Err(Error::custom(format!(
+                            "failed to serialize TreeRepr to spec: {e:?}"
+                        )));
+                    }
+                };
                 seq.serialize_element("::")?;
                 seq.serialize_element("()")?;
                 seq.serialize_element(&args[1..])?;
@@ -288,21 +315,24 @@ impl<'de, T: TreeRepr> Deserialize<'de> for Tree<T> {
                 self,
                 mut seq: A,
             ) -> Result<Self::Value, A::Error> {
-                let Some(base_spec) = seq.next_element::<&str>()? else {
+                let Some(base_spec) = seq.next_element::<String>()? else {
                     return Err(serde::de::Error::custom("missing base type in TyYAML TYPE"));
                 };
-                let Some(base) = T::deserialize_spec(base_spec) else {
-                    return Err(serde::de::Error::custom(
-                        "malformated TreeRepr in TyYAML TYPE",
-                    ));
+                let base = match T::deserialize_spec(&base_spec) {
+                    Ok(x) => x,
+                    Err(e) => {
+                        return Err(serde::de::Error::custom(format!(
+                            "failed to deserialize TreeRepr from spec: {e:?}"
+                        )));
+                    }
                 };
                 self.continue_visit(seq, Tree::Base(base))
             }
         }
         #[derive(Deserialize)]
         #[serde(untagged)]
-        enum Spec<'a> {
-            Str(&'a str),
+        enum Spec {
+            Str(String),
             Len([u32; 1]),
         }
         impl<'de, T: TreeRepr> Visitor<T> {
@@ -312,7 +342,7 @@ impl<'de, T: TreeRepr> Deserialize<'de> for Tree<T> {
                 mut base: Tree<T>,
             ) -> Result<Tree<T>, A::Error> {
                 'visit_loop: loop {
-                    let Some(spec) = seq.next_element::<Spec<'_>>()? else {
+                    let Some(spec) = seq.next_element::<Spec>()? else {
                         return Ok(base);
                     };
                     let spec = match spec {
@@ -342,10 +372,13 @@ impl<'de, T: TreeRepr> Deserialize<'de> for Tree<T> {
                         base = Tree::Sub(args);
                         continue 'visit_loop;
                     }
-                    let Some(m) = T::deserialize_spec(spec) else {
-                        return Err(serde::de::Error::custom(
-                            "malformated TreeRepr in TyYAML TYPE",
-                        ));
+                    let m = match T::deserialize_spec(&spec) {
+                        Ok(x) => x,
+                        Err(e) => {
+                            return Err(serde::de::Error::custom(format!(
+                                "failed to deserialize TreeRepr from spec: {e:?}"
+                            )));
+                        }
                     };
                     if seq.next_element::<&str>()? != Some("::") {
                         return Err(serde::de::Error::custom(
@@ -406,7 +439,7 @@ impl<'de, T: TreeRepr> Deserialize<'de> for Tree<T> {
                     Some(x) => Vec::with_capacity(x + 1),
                 };
                 // push a dummy value to take space for the return value
-                v.push(Tree::Base(T::void()));
+                v.push(Tree::Base(T::deserialize_void()));
                 while let Some(base) = seq.next_element::<Tree<T>>()? {
                     v.push(base);
                 }

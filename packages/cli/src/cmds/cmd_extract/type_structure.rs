@@ -5,7 +5,7 @@ use tyyaml::{Prim, Tree, TreeRepr};
 
 use crate::config::Config;
 
-use super::bucket::{GoffBuckets, MergeQueue};
+use super::bucket::MergeQueue;
 use super::pre::*;
 
 pub struct TypeStage2 {
@@ -122,23 +122,56 @@ pub enum Type1 {
     Typedef(NamespacedTemplatedName, Goff),
     /// Enum. The name does not include template args. could be anonymous
     Enum(Option<NamespacedName>, Type0Enum),
-    /// Declaration of an enum. 
+    /// Declaration of an enum.
     /// Name includes template args
     EnumDecl(NamespacedTemplatedName),
     /// Union. The name does not include template args. could be anonymous
     Union(Option<NamespacedName>, Type0Union),
-    /// Declaration of union. 
+    /// Declaration of union.
     /// Name includes template args
     UnionDecl(NamespacedTemplatedName),
     /// Struct or Class. The name does not include template args. could be anonymous
     Struct(Option<NamespacedName>, Type0Struct),
-    /// Declaration of struct or class. 
+    /// Declaration of struct or class.
     /// Name includes template args
     StructDecl(NamespacedTemplatedName),
     /// Composition of other types
     Tree(Tree<Goff>),
-    /// Alias to another type for type layout purpose (basically typedef without a name)
-    Alias(Goff),
+}
+impl Type1 {
+    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
+        match self {
+            Type1::Prim(_) => {}
+            Type1::Typedef(_, goff) => {
+                *goff = cu::check!(f(*goff), "failed to map typedef goff {goff}")?;
+            }
+            Type1::Enum(_, _) => {}
+            Type1::EnumDecl(_) => {}
+            Type1::Union(_, data) => {
+                cu::check!(data.map_goff(&f), "failed to map union")?;
+            }
+            Type1::UnionDecl(_) => {}
+            Type1::Struct(_, data) => {
+                for m in &mut data.members {
+                    cu::check!(m.map_goff(&f), "failed to map struct members")?;
+                }
+                for (_, e) in &mut data.vtable {
+                    cu::check!(e.map_goff(&f), "failed to map struct vtable entry")?;
+                }
+            }
+            Type1::StructDecl(_) => {}
+            Type1::Tree(tree) => {
+                cu::check!(
+                    tree.for_each_mut(|r| {
+                        *r = f(*r)?;
+                        cu::Ok(())
+                    }),
+                    "failed to map type tree"
+                )?;
+            }
+        }
+        Ok(())
+    }
 }
 
 pub struct TypeStage0 {
@@ -146,6 +179,7 @@ pub struct TypeStage0 {
     pub name: String,
     pub types: GoffMap<Type0>,
     pub config: Arc<Config>,
+    pub ns: NamespaceMaps,
 }
 
 /// Raw definition of types parsed directly from DWARF
@@ -158,17 +192,17 @@ pub enum Type0 {
     Typedef(NamespacedName, Goff),
     /// Enum. The name does not include template args. could be anonymous
     Enum(Option<NamespacedName>, Type0Enum),
-    /// Declaration of an enum. 
+    /// Declaration of an enum.
     /// Name includes template args
     EnumDecl(Namespace, NamespacedName),
     /// Union. The name does not include template args. could be anonymous
     Union(Option<NamespacedName>, Type0Union),
-    /// Declaration of union. 
+    /// Declaration of union.
     /// Name includes template args
     UnionDecl(Namespace, NamespacedName),
     /// Struct or Class. The name does not include template args. could be anonymous
     Struct(Option<NamespacedName>, Type0Struct),
-    /// Declaration of struct or class. 
+    /// Declaration of struct or class.
     /// Name includes template args
     StructDecl(Namespace, NamespacedName),
     /// Composition of other types
@@ -207,6 +241,13 @@ pub struct Type0Union {
 }
 
 impl Type0Union {
+    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
+        for m in &mut self.members {
+            cu::check!(m.map_goff(&f), "failed to map union members")?;
+        }
+        Ok(())
+    }
+
     pub fn merge_checked(&self, other: &Self, merges: &mut MergeQueue) -> cu::Result<()> {
         self.check_merge_precondition(other)?;
         let mut mq = MergeQueue::default();
@@ -464,7 +505,6 @@ pub enum SpecialMember {
     Bitfield(u32), // byte_size
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NamespacedTemplatedName {
     /// The untemplated base name (with namespace)
@@ -474,49 +514,51 @@ pub struct NamespacedTemplatedName {
 }
 impl NamespacedTemplatedName {
     pub fn new(base: &NamespacedName) -> Self {
-        Self {base: base.clone(), templates: vec![]}
+        Self {
+            base: base.clone(),
+            templates: vec![],
+        }
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NamespacedTemplatedArg {
     /// The untemplated base name (with namespace)
-    pub base: Tree<NamespaceLiteral>,
+    pub base: NamespacedName,
     /// The template types
     pub templates: Vec<TemplateArg<NamespacedTemplatedArg>>,
 }
 impl NamespacedTemplatedArg {
-    pub fn new(base: Tree<NamespaceLiteral>) -> Self {
-        Self {base, templates: vec![]}
+    pub fn new(base: NamespacedName) -> Self {
+        Self {
+            base,
+            templates: vec![],
+        }
     }
-    pub fn with_templates(base: Tree<NamespaceLiteral>, templates: Vec<TemplateArg<Self>>) -> Self {
-        Self {base, templates}
-    }
-}
-impl TreeRepr for NamespaceLiteral {
-    fn void() -> Self {
-        NamespaceLiteral::new("void")
-    }
-
-    fn deserialize_spec(spec: &str) -> Option<Self> {
-        Self::parse(spec).ok()
+    pub fn with_templates(base: NamespacedName, templates: Vec<TemplateArg<Self>>) -> Self {
+        Self { base, templates }
     }
 }
+impl TreeRepr for NamespacedTemplatedArg {
+    fn serialize_spec(&self) -> cu::Result<String> {
+        Ok(json::stringify(self)?)
+    }
+    fn deserialize_void() -> Self {
+        Self::new(NamespacedName::unnamespaced("void"))
+    }
+    fn deserialize_spec(spec: &str) -> cu::Result<Self> {
+        Ok(json::parse(spec)?)
+    }
+}
 
-
-
-#[derive(Clone, PartialEq, Eq, Hash, Display, DebugCustom, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum TemplateArg<T> {
+pub enum TemplateArg<T: TreeRepr> {
     // Constant value. Could also be boolean (0=false, 1=true)
     #[display("{}", _0)]
-    #[debug("{:?}", _0)]
     Const(i64),
     #[display("{}", _0)]
-    #[debug("{:?}", _0)]
-    Type(T),
+    Type(Tree<T>),
 }
-
-// pub fn parse_templated_name(name: &str) -> cu::Result<
 
 pub fn tree_merge_checked(a: &Tree<Goff>, b: &Tree<Goff>, merges: &mut MergeQueue) -> cu::Result<()> {
     match (a, b) {

@@ -30,20 +30,24 @@ abandon-typedefs = [
     "^std::__1::aligned_storage_t",
     "^std::__1::conditional_t",
     "^std::__1::add_pointer_t",
+    "^std::__1::remove_reference_t",
+    "^std::__1::__optional_sfinae_assign_base_t",
+    "^std::__1::__optional_sfinae_ctor_base_t",
 ]
-
-[extract.type-optimizer.pick-union-member]
-"uking::ui::PouchItem::Data" = "cook"
-"fpos_t" = "__opaque"
 
 [extract.name-resolution]
 rules = []
 test = []
 
-[extract.name-resolution.override]
-# de-templatize
-"^sead::OffsetList<.*>$" = "sead::OffsetList"
-"^sead::DelegateEvent<.*>$" = "sead::DelegateEvent"
+# [extract.type-optimizer.pick-union-member]
+# "uking::ui::PouchItem::Data" = "cook"
+# "fpos_t" = "__opaque"
+#
+#
+# [extract.name-resolution.override]
+# # de-templatize
+# "^sead::OffsetList<.*>$" = "sead::OffsetList"
+# "^sead::DelegateEvent<.*>$" = "sead::DelegateEvent"
 
 # [extract.type-optimizer.opaque-if]
 # name-matches = [

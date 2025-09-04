@@ -74,7 +74,7 @@ async fn run_internal(config: Config) -> cu::Result<()> {
             let config = Arc::clone(&config);
             let handle = pool.spawn(async move {
                 let ns = namespace::load_namespaces(&unit)?;
-                let stage0 = stage0_loader::load_types(&unit, config, ns)?;
+                let stage0 = stage0_loader::load(&unit, config, ns)?;
                 cu::Ok(stage0)
             });
             handles.push(handle);
@@ -102,7 +102,10 @@ async fn run_internal(config: Config) -> cu::Result<()> {
             let name = stage0.name.clone();
             cu::progress!(&bar, i, "{name}");
             let command = cu::check!(compile_commands.get(&name), "cannot find compile command for {name}")?;
-            let stage1 = cu::check!(stage0_clang_parse::parse_type(stage0, command).await, "failed to parse types for {name}")?;
+            let stage1 = cu::check!(
+                stage0_clang_parse::parse_type(stage0, command).await,
+                "failed to parse types for {name}"
+            )?;
         }
     };
 

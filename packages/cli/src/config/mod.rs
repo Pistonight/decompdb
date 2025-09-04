@@ -20,9 +20,12 @@ pub fn load(path: impl AsRef<Path>) -> cu::Result<Config> {
     resolve_path(&base_rel, &mut config.paths.elf)?;
     resolve_path(&base_rel, &mut config.paths.extract_output)?;
     resolve_path(&base_rel, &mut config.paths.compdb)?;
-    config.paths.system_header_paths.iter_mut().map(|x| {
-        resolve_path(&base_rel, x)
-    }).collect::<Result<Vec<_>, _>>()?;
+    config
+        .paths
+        .system_header_paths
+        .iter_mut()
+        .map(|x| resolve_path(&base_rel, x))
+        .collect::<Result<Vec<_>, _>>()?;
     resolve_path(&base_rel, &mut config.paths.functions_csv.path)?;
     resolve_path(&base_rel, &mut config.paths.data_csv.path)?;
 
@@ -53,7 +56,6 @@ pub struct Config {
     pub paths: CfgPaths,
     pub extract: CfgExtract,
 }
-
 
 /// Config for project paths
 ///

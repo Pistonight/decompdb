@@ -9,7 +9,7 @@ use gimli::{
     Abbreviations, AttributeValue, DwarfFileType, EndianSlice, LittleEndian as DwarfLittleEndian, Operation,
     UnitSectionOffset,
 };
-use tyyaml::Prim;
+use tyyaml::{Prim, TreeRepr};
 
 use super::pre::*;
 
@@ -312,16 +312,14 @@ impl<'x> Die<'x, '_> {
         )?;
         Ok(value)
     }
-    
+
     /// Get the name of the entry before the first `<`. This can only be used
     /// for types, and not function names, because of `operator<=`
     pub fn untemplated_name_opt(&self) -> cu::Result<Option<&str>> {
         let value = self.name_opt()?;
-        Ok(value.map(|x| {
-            match x.find('<') {
-                Some(i) => &x[..i],
-                None => x
-            }
+        Ok(value.map(|x| match x.find('<') {
+            Some(i) => &x[..i],
+            None => x,
         }))
     }
 
@@ -623,17 +621,13 @@ impl Goff {
 }
 
 impl Serialize for Goff {
-    fn serialize<
-    S: serde::Serializer
-    >(&self, ser: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         ser.serialize_str(&self.to_string())
     }
 }
 
 impl<'de> Deserialize<'de> for Goff {
-    fn deserialize<
-    D: serde::Deserializer<'de>
-    >(de: D) -> Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
         return de.deserialize_str(Visitor);
         struct Visitor;
         impl<'de> serde::de::Visitor<'de> for Visitor {
@@ -641,16 +635,26 @@ impl<'de> Deserialize<'de> for Goff {
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 write!(f, "a hex integer literal")
             }
-            fn visit_str<
-            E: serde::de::Error
-            >(self, v: &str) -> Result<Self::Value, E> {
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
                 match cu::parse::<usize>(v) {
                     Ok(x) => Ok(Goff(x)),
-                    Err(e) => {
-                        Err(serde::de::Error::custom(format!("failed to parse Goff: {e}")))
-                    }
+                    Err(e) => Err(serde::de::Error::custom(format!("failed to parse Goff: {e}"))),
                 }
             }
         }
+    }
+}
+
+impl TreeRepr for Goff {
+    fn serialize_spec(&self) -> cu::Result<String> {
+        Ok(self.to_string())
+    }
+
+    fn deserialize_void() -> Self {
+        Self::prim(Prim::Void)
+    }
+
+    fn deserialize_spec(spec: &str) -> cu::Result<Self> {
+        Ok(Self(cu::parse::<usize>(spec)?))
     }
 }

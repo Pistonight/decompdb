@@ -21,6 +21,11 @@ impl From<Prim> for Ty {
 }
 
 impl Ty {
+    pub fn to_tyyaml(&self) -> String {
+        let mut s = String::new();
+        self.write_tyyaml(&mut s);
+        s
+    }
     /// Write the Type ID to a TyYAML buffer.
     pub fn write_tyyaml(&self, buf: &mut String) {
         use std::fmt::Write;
@@ -32,18 +37,22 @@ impl Ty {
 }
 
 impl TreeRepr for Ty {
-    fn void() -> Self {
+    fn serialize_spec(&self) -> cu::Result<String> {
+        Ok(self.to_tyyaml())
+    }
+    fn deserialize_void() -> Self {
         Self::Prim(Prim::Void)
     }
 
-    fn deserialize_spec(spec: &str) -> Option<Self> {
+    fn deserialize_spec(spec: &str) -> cu::Result<Self> {
         if spec.starts_with('"') {
-            if !spec.ends_with('"') {
-                return None;
-            }
-            return Some(Ty::Named(spec[1..spec.len() - 1].to_string()));
+            cu::ensure!(spec.ends_with('"'), "unterminated quoted Ty spec: '{spec}'");
+            return Ok(Ty::Named(spec[1..spec.len() - 1].to_string()));
         }
-        Prim::from_str(spec).map(Self::Prim)
+        cu::check!(
+            Prim::from_str(spec).map(Self::Prim),
+            "invalid primitive Ty: '{spec}'"
+        )
     }
 }
 
@@ -78,11 +87,10 @@ impl<'de> Deserialize<'de> for Ty {
                 E: serde::de::Error,
             {
                 match Ty::deserialize_spec(v) {
-                    Some(x) => Ok(x),
-                    None => 
-                    Err(serde::de::Error::custom(
-                        "malformated TYPE_ID in TyYAML TYPE",
-                    ))
+                    Ok(x) => Ok(x),
+                    Err(e) => Err(serde::de::Error::custom(format!(
+                        "failed to deserialize Ty: {e:?}"
+                    ))),
                 }
             }
         }

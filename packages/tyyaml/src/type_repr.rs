@@ -28,7 +28,7 @@ impl TyYaml {
     pub fn write_tyyaml(&self, buf: &mut String) {
         buf.push_str("[ ");
         self.write_tyyaml_internal(buf);
-            buf.push_str(" ]");
+        buf.push_str(" ]");
     }
     fn write_tyyaml_internal(&self, buf: &mut String) {
         use std::fmt::Write as _;
@@ -151,15 +151,47 @@ mod tests {
             "[ bool,'*','*' ]",
         )?;
         test_type(TyYaml::ptr(TyYaml::ptr(Prim::U8)), "u8**", "[ u8,'*','*' ]")?;
-        test_type(TyYaml::ptr(TyYaml::ptr(Prim::U16)), "u16**", "[ u16,'*','*' ]")?;
-        test_type(TyYaml::ptr(TyYaml::ptr(Prim::U32)), "u32**", "[ u32,'*','*' ]")?;
-        test_type(TyYaml::ptr(TyYaml::ptr(Prim::U64)), "u64**", "[ u64,'*','*' ]")?;
+        test_type(
+            TyYaml::ptr(TyYaml::ptr(Prim::U16)),
+            "u16**",
+            "[ u16,'*','*' ]",
+        )?;
+        test_type(
+            TyYaml::ptr(TyYaml::ptr(Prim::U32)),
+            "u32**",
+            "[ u32,'*','*' ]",
+        )?;
+        test_type(
+            TyYaml::ptr(TyYaml::ptr(Prim::U64)),
+            "u64**",
+            "[ u64,'*','*' ]",
+        )?;
         test_type(TyYaml::ptr(TyYaml::ptr(Prim::I8)), "i8**", "[ i8,'*','*' ]")?;
-        test_type(TyYaml::ptr(TyYaml::ptr(Prim::I16)), "i16**", "[ i16,'*','*' ]")?;
-        test_type(TyYaml::ptr(TyYaml::ptr(Prim::I32)), "i32**", "[ i32,'*','*' ]")?;
-        test_type(TyYaml::ptr(TyYaml::ptr(Prim::I64)), "i64**", "[ i64,'*','*' ]")?;
-        test_type(TyYaml::ptr(TyYaml::ptr(Prim::F32)), "f32**", "[ f32,'*','*' ]")?;
-        test_type(TyYaml::ptr(TyYaml::ptr(Prim::F64)), "f64**", "[ f64,'*','*' ]")?;
+        test_type(
+            TyYaml::ptr(TyYaml::ptr(Prim::I16)),
+            "i16**",
+            "[ i16,'*','*' ]",
+        )?;
+        test_type(
+            TyYaml::ptr(TyYaml::ptr(Prim::I32)),
+            "i32**",
+            "[ i32,'*','*' ]",
+        )?;
+        test_type(
+            TyYaml::ptr(TyYaml::ptr(Prim::I64)),
+            "i64**",
+            "[ i64,'*','*' ]",
+        )?;
+        test_type(
+            TyYaml::ptr(TyYaml::ptr(Prim::F32)),
+            "f32**",
+            "[ f32,'*','*' ]",
+        )?;
+        test_type(
+            TyYaml::ptr(TyYaml::ptr(Prim::F64)),
+            "f64**",
+            "[ f64,'*','*' ]",
+        )?;
         test_type(
             TyYaml::array(TyYaml::array(Prim::Void, 5), 5),
             "void[5][5]",
@@ -342,7 +374,11 @@ mod tests {
         )?;
 
         test_type(TyYaml::named("Foo"), "Foo", r#"[ '"Foo"' ]"#)?;
-        test_type(TyYaml::ptr(TyYaml::named("Foo")), "Foo*", r#"[ '"Foo"','*' ]"#)?;
+        test_type(
+            TyYaml::ptr(TyYaml::named("Foo")),
+            "Foo*",
+            r#"[ '"Foo"','*' ]"#,
+        )?;
         test_type(
             TyYaml::ptr(TyYaml::ptr(TyYaml::named("Foo"))),
             "Foo**",

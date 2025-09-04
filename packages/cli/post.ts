@@ -1,7 +1,3 @@
-const FILE = "out.json";
-
-import fs from "node:fs";
-
 const tuNode = JSON.parse(await Bun.stdin.text());
 const findNodeByName = (node, name: string) => {
     if (node.name === name) {
@@ -19,7 +15,7 @@ const findNodeByName = (node, name: string) => {
     }
     return undefined;
 }
-const node = findNodeByName(tuNode, "____stage0_clang_type_parse_0x0009152e");
+const node = findNodeByName(tuNode, "____stage0_clang_type_parse_0x0020cd56");
 if (!node) {
     throw new Error("cannot find node");
 }

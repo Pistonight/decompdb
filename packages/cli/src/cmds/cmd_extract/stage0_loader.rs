@@ -9,12 +9,17 @@ use super::pre::*;
 use super::type_structure::*;
 
 /// Load the type data from DWARF units
-pub fn load_types(unit: &Unit, config: Arc<Config>, nsmaps: NamespaceMaps) -> cu::Result<TypeStage0> {
+pub fn load(unit: &Unit, config: Arc<Config>, nsmaps: NamespaceMaps) -> cu::Result<TypeStage0> {
     let pointer_type = config.extract.pointer_type()?;
+    let mut types = GoffMap::default();
+    // add primitive types
+    for p in Prim::iter() {
+        types.insert(Goff::prim(p), Type0::Prim(p));
+    }
     let mut ctx = LoadTypeCtx {
         pointer_type,
         config,
-        types: Default::default(),
+        types,
         nsmaps,
     };
     cu::debug!("loading types for {unit}");
@@ -26,6 +31,7 @@ pub fn load_types(unit: &Unit, config: Arc<Config>, nsmaps: NamespaceMaps) -> cu
         name: unit.name.to_string(),
         types: ctx.types,
         config: ctx.config,
+        ns: ctx.nsmaps,
     })
 }
 fn load_types_root(unit: &Unit, ctx: &mut LoadTypeCtx) -> cu::Result<()> {
@@ -230,12 +236,11 @@ fn load_enum_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu::
     )?;
     if is_decl {
         // keep the templates for resolution
-        let name = cu::check!(
-            entry.qual_name(&ctx.nsmaps),
-            "failed to get enum decl name at {offset}"
+        let name = cu::check!(entry.qual_name(&ctx.nsmaps), "failed to get enum decl name at {offset}")?;
+        let decl_namespace = cu::check!(
+            ctx.nsmaps.namespaces.get(&offset),
+            "failed to get namespace for enum decl at {offset}"
         )?;
-        let decl_namespace = cu::check!(ctx.nsmaps.namespaces.get(&offset),
-            "failed to get namespace for enum decl at {offset}")?;
         return Ok(Type0::EnumDecl(decl_namespace.clone(), name));
     }
     // remove templates from name for definition,
@@ -300,8 +305,10 @@ fn load_union_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu:
             entry.qual_name(&ctx.nsmaps),
             "failed to get union decl name at {offset}"
         )?;
-        let decl_namespace = cu::check!(ctx.nsmaps.namespaces.get(&offset),
-            "failed to get namespace for union decl at {offset}")?;
+        let decl_namespace = cu::check!(
+            ctx.nsmaps.namespaces.get(&offset),
+            "failed to get namespace for union decl at {offset}"
+        )?;
         return Ok(Type0::UnionDecl(decl_namespace.clone(), name));
     }
     // remove templates from name for definition,
@@ -398,8 +405,10 @@ fn load_struct_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu
             entry.qual_name(&ctx.nsmaps),
             "failed to get struct decl name at {offset}"
         )?;
-        let decl_namespace = cu::check!(ctx.nsmaps.namespaces.get(&offset),
-            "failed to get namespace for struct decl at {offset}")?;
+        let decl_namespace = cu::check!(
+            ctx.nsmaps.namespaces.get(&offset),
+            "failed to get namespace for struct decl at {offset}"
+        )?;
         return Ok(Type0::StructDecl(decl_namespace.clone(), name));
     }
     // remove templates from name for definition,
@@ -618,7 +627,7 @@ fn load_template_type_parameter(entry: &Die<'_, '_>, out: &mut Vec<TemplateArg<G
                 Some(l) => entry.to_global(l),
                 None => Goff::prim(Prim::Void),
             };
-            out.push(TemplateArg::Type(type_goff));
+            out.push(TemplateArg::Type(Tree::Base(type_goff)));
         }
         DW_TAG_template_value_parameter => {
             let value = cu::check!(
@@ -693,5 +702,5 @@ struct LoadTypeCtx {
     pointer_type: Prim,
     config: Arc<Config>,
     types: GoffMap<Type0>,
-    nsmaps: NamespaceMaps
+    nsmaps: NamespaceMaps,
 }

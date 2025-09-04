@@ -19,6 +19,6 @@ mod type_structure;
 
 mod pre {
     pub use super::dwarf_parse::*;
-    pub use super::namespace::{NamespaceMaps,Namespace, NamespacedName, NameSeg, NamespaceLiteral};
+    pub use super::namespace::{NameSeg, Namespace, NamespaceLiteral, NamespaceMaps, NamespacedName};
     pub use gimli::constants::*;
 }

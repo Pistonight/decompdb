@@ -1,13 +1,10 @@
-use std::borrow::Cow;
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::path::PathBuf;
 
+use clang_ast::Node;
 use cu::pre::*;
 use fxhash::FxHasher64;
-        use clang_ast::Node;
-        use tyyaml::Tree;
+use tyyaml::Tree;
 
 use crate::config::Config;
 
@@ -26,37 +23,46 @@ pub async fn parse_type(stage0: TypeStage0, command: &CompileCommand) -> cu::Res
         stage0.name
     )?;
     let original_cpp_file = Path::new(&stage0.name);
-    cu::ensure!(original_cpp_file.is_absolute(), "compilation unit name must be absolute: {}", stage0.name);
-    cu::ensure!(original_cpp_file.exists(), "cannot find source file for compilation unit: {}", stage0.name);
+    cu::ensure!(
+        original_cpp_file.is_absolute(),
+        "compilation unit name must be absolute: {}",
+        stage0.name
+    );
+    cu::ensure!(
+        original_cpp_file.exists(),
+        "cannot find source file for compilation unit: {}",
+        stage0.name
+    );
 
     let mut final_names = BTreeMap::default();
     let mut requests = BTreeMap::default();
     let args = shell_words::join(&command.args);
-    let mut source = format!(r##"
+    let mut source = format!(
+        r##"
 // clang {args}
 
 // this is a hack for private declarations
 #define private public
 #define protected public
 #include "{}"
-"##, stage0.name);
+"##,
+        stage0.name
+    );
 
     // load up the source
     for (k, t) in &stage0.types {
         use std::fmt::Write;
         let (name, namespace) = match t {
             Type0::Typedef(name, _) => (name, None),
-            Type0::EnumDecl(ns, name) |
-            Type0::UnionDecl(ns, name) |
-            Type0::StructDecl(ns, name) => {
+            Type0::EnumDecl(ns, name) | Type0::UnionDecl(ns, name) | Type0::StructDecl(ns, name) => {
                 // type_name_and_tokens.push((*k, name))
                 (name, Some(ns))
             }
-            _ => continue
+            _ => continue,
         };
         // no need to process untemplated
         if !name.basename().contains('<') {
-            final_names.insert(*k,NamespacedTemplatedName::new(name));
+            final_names.insert(*k, NamespacedTemplatedName::new(name));
             continue;
         }
         let mut name_source = name.to_cpp_typedef_source()?;
@@ -74,7 +80,7 @@ pub async fn parse_type(stage0: TypeStage0, command: &CompileCommand) -> cu::Res
         let request = ParseRequest {
             goff: *k,
             source: name_source,
-            namespace: name.namespace()
+            namespace: name.namespace(),
         };
         requests.insert(*k, request);
     }
@@ -82,13 +88,15 @@ pub async fn parse_type(stage0: TypeStage0, command: &CompileCommand) -> cu::Res
     if !requests.is_empty() {
         let parsed_results = match command.try_read_existing_output(&source, &requests) {
             Some(x) => x,
-            None => cu::check!(command.invoke(&source, &requests).await, "failed to invoke type parse command for: {}", stage0.name)?,
+            None => cu::check!(
+                command.invoke(&source, &requests, &stage0.ns).await,
+                "failed to invoke type parse command for: {}",
+                stage0.name
+            )?,
         };
 
-        let result_keys: BTreeSet<(Goff, &str)> = 
-        parsed_results.iter().map(|(k, r)| (*k, r.source.as_str())).collect();
-        let request_keys: BTreeSet<(Goff, &str)> = 
-        requests.iter().map(|(k, r)| (*k, r.source.as_str())).collect();
+        let result_keys: BTreeSet<(Goff, &str)> = parsed_results.iter().map(|(k, r)| (*k, r.source.as_str())).collect();
+        let request_keys: BTreeSet<(Goff, &str)> = requests.iter().map(|(k, r)| (*k, r.source.as_str())).collect();
         cu::ensure!(result_keys == request_keys, "did not resolve all types");
 
         for (k, result) in parsed_results {
@@ -123,14 +131,20 @@ pub async fn parse_type(stage0: TypeStage0, command: &CompileCommand) -> cu::Res
                 types.insert(k, Type1::Enum(name, data));
             }
             Type0::UnionDecl(_, _) => {
-                let name = cu::check!(final_names.remove(&k), "was not able to resolve union decl name for {k}")?;
+                let name = cu::check!(
+                    final_names.remove(&k),
+                    "was not able to resolve union decl name for {k}"
+                )?;
                 types.insert(k, Type1::UnionDecl(name));
             }
             Type0::Union(name, data) => {
                 types.insert(k, Type1::Union(name, data));
             }
             Type0::StructDecl(_, _) => {
-                let name = cu::check!(final_names.remove(&k), "was not able to resolve struct decl name for {k}")?;
+                let name = cu::check!(
+                    final_names.remove(&k),
+                    "was not able to resolve struct decl name for {k}"
+                )?;
                 types.insert(k, Type1::StructDecl(name));
             }
             Type0::Struct(name, data) => {
@@ -145,14 +159,16 @@ pub async fn parse_type(stage0: TypeStage0, command: &CompileCommand) -> cu::Res
         }
     }
 
-    if stage0.name.contains("seadController") {
-        cu::bail!("test break");
-    }
+    // if stage0.name.contains("seadHostIOCurve") {
+    //     cu::bail!("test break");
+    // }
 
-    Ok(TypeStage1 { 
-        offset: stage0.offset, 
-        name: stage0.name, 
-        types, config: stage0.config })
+    Ok(TypeStage1 {
+        offset: stage0.offset,
+        name: stage0.name,
+        types,
+        config: stage0.config,
+    })
 }
 
 fn clean_up_name_cpp_source(name: &mut String) {
@@ -207,12 +223,17 @@ impl TypeParseCommand {
         }
         let out_file = format!("{cpp_file}.json");
 
-        Ok(Self { cpp_file, out_file, args })
+        Ok(Self {
+            cpp_file,
+            out_file,
+            args,
+        })
     }
 
-    fn try_read_existing_output(&self, 
+    fn try_read_existing_output(
+        &self,
         new_source: &str,
-        new_requests: &GoffMap<ParseRequest<'_>>
+        new_requests: &GoffMap<ParseRequest<'_>>,
     ) -> Option<GoffMap<ParseResult>> {
         let cpp_file = Path::new(&self.cpp_file);
         if !cpp_file.exists() {
@@ -239,9 +260,13 @@ impl TypeParseCommand {
             }
             Ok(x) => x,
         };
-        let old_sources = old_output.iter().map(|(k, t)| (*k, &t.source))
+        let old_sources = old_output
+            .iter()
+            .map(|(k, t)| (*k, &t.source))
             .collect::<BTreeMap<_, _>>();
-        let new_sources = new_requests.iter().map(|(k, t)| (*k, &t.source))
+        let new_sources = new_requests
+            .iter()
+            .map(|(k, t)| (*k, &t.source))
             .collect::<BTreeMap<_, _>>();
         if old_sources != new_sources {
             return None;
@@ -250,25 +275,33 @@ impl TypeParseCommand {
         Some(old_output)
     }
 
-    async fn invoke(&self, source: &str, requests: &GoffMap<ParseRequest<'_>>) -> cu::Result<GoffMap<ParseResult>> {
+    async fn invoke(
+        &self,
+        source: &str,
+        requests: &GoffMap<ParseRequest<'_>>,
+        ns: &NamespaceMaps,
+    ) -> cu::Result<GoffMap<ParseResult>> {
         // write the source file
         cu::fs::write(&self.cpp_file, source)?;
         cu::fs::remove(&self.out_file)?;
 
         // call clang
-        let clang = cu::bin::find("clang", [
-            cu::bin::from_env("CLANG"),
-            cu::bin::in_PATH(),
-        ])?;
-        let (child, out, err) = clang.command()
-        .args(&self.args)
+        let clang = cu::bin::find("clang", [cu::bin::from_env("CLANG"), cu::bin::in_PATH()])?;
+        let (child, out, err) = clang
+            .command()
+            .args(&self.args)
             .stdout(cu::pio::string())
             .stderr(cu::pio::string())
             .stdin_null()
-            .co_spawn().await?;
+            .co_spawn()
+            .await?;
         if let Err(e) = child.co_wait_nz().await {
             let err = err.co_join().await??;
             cu::error!("stderr from clang:\n{err}");
+            cu::hint!(
+                "failed to compile the source for type parsing - this usually means the type expression has unparsable syntax."
+            );
+            cu::hint!("consider using extract.type-parser.abandon-typedefs config to exclude this name");
             return Err(e);
         }
 
@@ -278,12 +311,17 @@ impl TypeParseCommand {
         drop(out);
 
         // parse the node.
-        cu::ensure!(node.kind == Ast::TranslationUnitDecl, "outermost AST node must be TranslationUnitDecl");
+        cu::ensure!(
+            node.kind == Ast::TranslationUnitDecl,
+            "outermost AST node must be TranslationUnitDecl"
+        );
         let tu_node = node;
 
         let mut results = GoffMap::default();
-        let mut token_to_request: BTreeMap<_, _> = 
-        requests.into_iter().map(|(k, r)| (format!("{PARSE_TYPE_TOKEN}_{k}"), r)).collect();
+        let mut token_to_request: BTreeMap<_, _> = requests
+            .into_iter()
+            .map(|(k, r)| (format!("{PARSE_TYPE_TOKEN}_{k}"), r))
+            .collect();
         let mut stack = vec![];
         for n in tu_node.inner.iter().rev() {
             stack.push(n);
@@ -302,12 +340,15 @@ impl TypeParseCommand {
             let Some(request) = token_to_request.remove(token) else {
                 continue;
             };
-            match parse_ast(&node, request.namespace) {
+            match parse_ast(&node, request.namespace, ns) {
                 Ok(parsed) => {
-                    results.insert(request.goff, ParseResult {
-                        source: request.source.clone(),
-                        parsed
-                    });
+                    results.insert(
+                        request.goff,
+                        ParseResult {
+                            source: request.source.clone(),
+                            parsed,
+                        },
+                    );
                 }
                 Err(e) => {
                     match json::stringify_pretty(node) {
@@ -332,7 +373,6 @@ impl TypeParseCommand {
 
         Ok(results)
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -394,16 +434,18 @@ enum Ast {
         name: Option<String>,
     },
     TypedefDecl {
-        name: String
+        name: String,
     },
     ElaboratedType {
         #[serde(default)]
-        qualifier: String
+        qualifier: String,
+        #[serde(rename = "type")]
+        ty: AstType,
     },
     #[serde(rename_all = "camelCase")]
-    TemplateSpecializationType{
+    TemplateSpecializationType {
         /// The "untemplated name", but could have template in the qualifier
-        template_name: String
+        template_name: String,
     },
     TemplateArgument,
     ConstantExpr {
@@ -411,19 +453,28 @@ enum Ast {
     },
     QualType,
     PointerType,
+    MemberPointerType,
+    LValueReferenceType,
+    RValueReferenceType,
+    ParenType, // indicate the inner is a function type
+    FunctionProtoType,
     BuiltinType {
-        r#type: AstType
+        #[serde(rename = "type")]
+        ty: AstType,
     },
     TypedefType {
-        r#type: AstType,
+        #[serde(rename = "type")]
+        ty: AstType,
         // decl: AstDecl,
     },
     RecordType {
-        r#type: AstType,
+        #[serde(rename = "type")]
+        ty: AstType,
         // decl: AstDecl,
     },
     EnumType {
-        r#type: AstType,
+        #[serde(rename = "type")]
+        ty: AstType,
         // decl: AstDecl,
     },
     // Other,
@@ -435,19 +486,19 @@ enum Ast {
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AstType {
-    qual_type: String
+    qual_type: String,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AstDecl {
-    name: String
+    name: String,
 }
 
-fn parse_ast(node: &Node<Ast>, namespace: &Namespace) -> cu::Result<NamespacedTemplatedName> {
+fn parse_ast(node: &Node<Ast>, namespace: &Namespace, nsmaps: &NamespaceMaps) -> cu::Result<NamespacedTemplatedName> {
     cu::ensure!(node.inner.len() == 1, "TypedefDecl node should have inner length 1");
     let node = &node.inner[0];
-    let Ast::ElaboratedType { qualifier } = &node.kind else {
+    let Ast::ElaboratedType { qualifier, .. } = &node.kind else {
         cu::bail!("TypedefDecl node have one ElaboratedType inner node");
     };
     cu::ensure!(node.inner.len() == 1, "ElaboratedType node should have inner length 1");
@@ -461,15 +512,20 @@ fn parse_ast(node: &Node<Ast>, namespace: &Namespace) -> cu::Result<NamespacedTe
         cu::bail!("template_name must starts with qualifier. qualifier='{qualifier}', template_name='{template_name}'");
     };
 
-    let template_args = cu::check!(parse_template_spec_ast(node), "failed to parse outermost templates")?;
+    let template_args = cu::check!(
+        parse_template_spec_ast(node, nsmaps),
+        "failed to parse outermost templates"
+    )?;
 
-    Ok(NamespacedTemplatedName { 
+    Ok(NamespacedTemplatedName {
         base: NamespacedName::namespaced(&namespace, base_name),
-        templates: template_args
+        templates: template_args,
     })
-
 }
-fn parse_template_spec_ast(node: &Node<Ast>) -> cu::Result<Vec<TemplateArg<NamespacedTemplatedArg>>> {
+fn parse_template_spec_ast(
+    node: &Node<Ast>,
+    ns: &NamespaceMaps,
+) -> cu::Result<Vec<TemplateArg<NamespacedTemplatedArg>>> {
     let mut template_args = Vec::new();
     // iterate through the templates
     for n in &node.inner {
@@ -477,117 +533,129 @@ fn parse_template_spec_ast(node: &Node<Ast>) -> cu::Result<Vec<TemplateArg<Names
             continue;
         }
         cu::ensure!(n.inner.len() == 1, "TemplateArgument node should have inner length 1");
-        template_args.push(parse_template_arg_ast(&n.inner[0])?);
+        template_args.push(parse_template_arg_ast(&n.inner[0], ns)?);
     }
 
     Ok(template_args)
 }
-fn parse_template_arg_ast(node: &Node<Ast>) -> cu::Result<TemplateArg<NamespacedTemplatedArg>> {
-    parse_template_arg_ast_recur(node, "")
+fn parse_template_arg_ast(node: &Node<Ast>, ns: &NamespaceMaps) -> cu::Result<TemplateArg<NamespacedTemplatedArg>> {
+    parse_template_arg_ast_recur(node, ns, "", None)
 }
 
-fn parse_template_arg_ast_recur(node: &Node<Ast>, qualifier: &str) -> cu::Result<TemplateArg<NamespacedTemplatedArg>> {
+fn parse_template_arg_ast_recur(
+    node: &Node<Ast>,
+    ns: &NamespaceMaps,
+    qualifier: &str,
+    elaborated_qual_type: Option<&str>,
+) -> cu::Result<TemplateArg<NamespacedTemplatedArg>> {
     match &node.kind {
-        Ast::ConstantExpr { value } => {
-            match value.as_str() {
-                "true" => Ok(TemplateArg::Const(1)),
-                "false" => Ok(TemplateArg::Const(0)),
-                v => {
-                    let v_i64 = cu::check!(cu::parse::<i64>(v), "failed to parse ConstantExpr as i64, value: '{value}'")?;
+        Ast::ConstantExpr { value } => match value.as_str() {
+            "true" => Ok(TemplateArg::Const(1)),
+            "false" => Ok(TemplateArg::Const(0)),
+            v => {
+                let v_i64 = cu::check!(
+                    cu::parse::<i64>(v),
+                    "failed to parse ConstantExpr as i64, value: '{value}'"
+                )?;
                 Ok(TemplateArg::Const(v_i64))
-                }
             }
-        }
-        Ast::BuiltinType {r#type: ty } => {
-            match ty.qual_type.as_str() {
-                "void"|"bool" => {
-                    Ok(TemplateArg::Type(
-                        NamespacedTemplatedArg::new(
-                        Tree::Base(NamespaceLiteral::new(&ty.qual_type)))))
-                }
-                "unsigned int" => {
-                    Ok(TemplateArg::Type(
-                        NamespacedTemplatedArg::new(
-                        Tree::Base(NamespaceLiteral::new("u32")))))
-                }
-                "char" => {
-                    Ok(TemplateArg::Type(
-                        NamespacedTemplatedArg::new(
-                        Tree::Base(NamespaceLiteral::new("i8")))))
-                }
-                "int" => {
-                    Ok(TemplateArg::Type(
-                        NamespacedTemplatedArg::new(
-                        Tree::Base(NamespaceLiteral::new("i32")))))
-                }
-                "long" => {
-                    Ok(TemplateArg::Type(
-                        NamespacedTemplatedArg::new(
-                        Tree::Base(NamespaceLiteral::new("i64")))))
-                }
-                "float" => {
-                    Ok(TemplateArg::Type(
-                        NamespacedTemplatedArg::new(
-                        Tree::Base(NamespaceLiteral::new("f32")))))
-                }
+        },
+        Ast::BuiltinType { ty } => {
+            let prim_name = match ty.qual_type.as_str() {
+                "void" => "void",
+                "bool" => "bool",
+                "unsigned char" => "u8",
+                "unsigned short" => "u16",
+                "unsigned int" => "u32",
+                "unsigned long" => "u64", // in most cases
+                "char" => "i8",
+                "short" => "i16",
+                "int" => "i32",
+                "long" => "i64", // in most cases
+                "float" => "f32",
+                "double" => "f64",
+                // implementation defined:
+                "wchar_t" => "i16",
                 _ => {
-                    cu::bail!("unexpected builtin qual_type: {} (please add it if you need).", ty.qual_type);
+                    cu::bail!(
+                        "unexpected builtin qual_type: {} (please add it if you need).",
+                        ty.qual_type
+                    );
                 }
-            }
-        }
-        Ast::ElaboratedType { qualifier: q } => {
-            let new_qualifier = format!("{qualifier}{q}");
-            cu::ensure!(node.inner.len() == 1, "ElaboratedType node should have inner length 1");
-            parse_template_arg_ast_recur(&node.inner[0], &new_qualifier)
-        }
-        Ast::TemplateSpecializationType {template_name} => {
-    let Some(base_name) = template_name.strip_prefix(qualifier) else {
-        cu::bail!("template_name must starts with qualifier. qualifier='{qualifier}', template_name='{template_name}'");
-    };
-            cu::ensure!(!base_name.contains('<'), "template base name should not contain templates");
-            cu::ensure!(!base_name.contains(':'), "template base name should not contain namespaces");
-            let template_args = cu::check!(parse_template_spec_ast(node), "failed to parse nested templates at {base_name}")?;
-            Ok(TemplateArg::Type(
-                NamespacedTemplatedArg::with_templates(
-                    Tree::Base(NamespaceLiteral::parse(template_name)?),
-                    template_args
-                )))
-        }
-        Ast::RecordType {r#type: ty} => {
-            // cu::ensure!(!ty.qual_type.contains('<'), "RecordType declaration should not contain templates");
-            // cu::ensure!(!ty.qual_type.contains(':'), "RecordType declaration should not contain namespaces");
-            // let full_name = format!("{qualifier}{}", ty.qual_type);
-            cu::ensure!(node.inner.is_empty(), "RecordType node should have no inner nodes");
-            Ok(TemplateArg::Type(
-                NamespacedTemplatedArg::new(
-                    Tree::Base(NamespaceLiteral::parse(&ty.qual_type)?))))
-        }
-        Ast::EnumType {r#type: ty} => {
-            // cu::ensure!(!ty.qual_type.contains('<'), "EnumType declaration should not contain templates");
-            // cu::ensure!(!decl.name.contains(':'), "EnumType declaration should not contain namespaces");
-            // let full_name = format!("{qualifier}{}", decl.name);
-            cu::ensure!(node.inner.is_empty(), "EnumType node should have no inner nodes");
-            Ok(TemplateArg::Type(
-                NamespacedTemplatedArg::new(
-                    Tree::Base(NamespaceLiteral::parse(&ty.qual_type)?))))
-        }
-        Ast::PointerType => {
-            cu::ensure!(node.inner.len() == 1, "PointerType node should have inner length 1");
-            let node = &node.inner[0];
-            let pointee = cu::check!(parse_template_arg_ast_recur(node, qualifier), "failed to parse pointee type")?;
-            let TemplateArg::Type(mut ty) = pointee else {
-                cu::bail!("cannot have pointer to constexpr");
             };
-            ty.base = Tree::Ptr(Box::new(ty.base));
-            Ok(TemplateArg::Type(ty))
+            Ok(TemplateArg::Type(Tree::Base(NamespacedTemplatedArg::new(
+                NamespacedName::unnamespaced(prim_name),
+            ))))
         }
-        Ast::TypedefType{ r#type: ty } => {
-            // cu::ensure!(!ty.qual_type.contains('<'), "TypedefType declaration should not contain templates");
-            // cu::ensure!(!decl.name.contains(':'), "TypedefType declaration should not contain namespaces");
-            // let full_name = format!("{qualifier}{}", decl.name);
-            Ok(TemplateArg::Type(
-                NamespacedTemplatedArg::new(
-                    Tree::Base(NamespaceLiteral::parse(&ty.qual_type)?))))
+        Ast::ElaboratedType { qualifier: q, ty } => {
+            cu::ensure!(node.inner.len() == 1, "ElaboratedType node should have inner length 1");
+            let new_qualifier = format!("{qualifier}{q}");
+            let qual_type = ty.qual_type.as_str();
+            parse_template_arg_ast_recur(&node.inner[0], ns, &new_qualifier, Some(qual_type))
+        }
+        Ast::TemplateSpecializationType { template_name } => {
+            let Some(base_name) = template_name.strip_prefix(qualifier) else {
+                cu::bail!(
+                    "template_name must starts with qualifier. qualifier='{qualifier}', template_name='{template_name}'"
+                );
+            };
+            cu::ensure!(
+                !base_name.contains('<'),
+                "template base name should not contain templates"
+            );
+            cu::ensure!(
+                !base_name.contains(':'),
+                "template base name should not contain namespaces"
+            );
+            let template_args = cu::check!(
+                parse_template_spec_ast(node, ns),
+                "failed to parse nested templates at {base_name}"
+            )?;
+            let name = cu::check!(
+                to_namespaced_name(ns, template_name),
+                "failed to convert template name to namespaced name"
+            )?;
+            Ok(TemplateArg::Type(Tree::Base(NamespacedTemplatedArg::with_templates(
+                name,
+                template_args,
+            ))))
+        }
+        Ast::RecordType { ty } => {
+            cu::ensure!(node.inner.is_empty(), "RecordType node should have no inner nodes");
+            let name = cu::check!(
+                to_namespaced_name_with_fallback(ns, &ty.qual_type, elaborated_qual_type),
+                "failed to convert record qualified name to namespaced name"
+            )?;
+            Ok(TemplateArg::Type(Tree::Base(NamespacedTemplatedArg::new(name))))
+        }
+        Ast::EnumType { ty } => {
+            cu::ensure!(node.inner.is_empty(), "EnumType node should have no inner nodes");
+            let name = cu::check!(
+                to_namespaced_name_with_fallback(ns, &ty.qual_type, elaborated_qual_type),
+                "failed to convert enum qualified name to namespaced name"
+            )?;
+            Ok(TemplateArg::Type(Tree::Base(NamespacedTemplatedArg::new(name))))
+        }
+        // *, &, &&
+        Ast::PointerType | Ast::LValueReferenceType | Ast::RValueReferenceType => {
+            cu::ensure!(node.inner.len() == 1, "{:?} node should have inner length 1", node.kind);
+            let node = &node.inner[0];
+            let pointee = cu::check!(
+                parse_template_arg_ast_recur(node, ns, qualifier, None),
+                "failed to parse pointee type"
+            )?;
+            let TemplateArg::Type(ty) = pointee else {
+                cu::bail!("cannot have pointer or reference to constexpr");
+            };
+            Ok(TemplateArg::Type(Tree::ptr(ty)))
+        }
+        Ast::TypedefType { ty } => {
+            // TODO: do we need fallback here?
+            let name = cu::check!(
+                to_namespaced_name(ns, &ty.qual_type),
+                "failed to convert typedef qualified name to namespaced name"
+            )?;
+            Ok(TemplateArg::Type(Tree::Base(NamespacedTemplatedArg::new(name))))
         }
         Ast::QualType => {
             // qualifier (const, volatile, restrict...)
@@ -595,10 +663,134 @@ fn parse_template_arg_ast_recur(node: &Node<Ast>, qualifier: &str) -> cu::Result
             // specializations, for now, we treat them as the same
             cu::ensure!(node.inner.len() == 1, "QualType node should have inner length 1");
             let node = &node.inner[0];
-            parse_template_arg_ast_recur(node, qualifier)
+            parse_template_arg_ast_recur(node, ns, qualifier, None)
+        }
+        Ast::ParenType => {
+            cu::ensure!(node.inner.len() == 1, "ParenType node should have inner length 1");
+            let node = &node.inner[0];
+            parse_template_arg_ast_recur_paren_type(node, ns)
+        }
+        Ast::FunctionProtoType => {
+            cu::ensure!(
+                node.inner.len() >= 1,
+                "function proto type must have at least 1 inner node"
+            );
+            let mut func_types = Vec::with_capacity(node.inner.len());
+            for node in &node.inner {
+                let inner = cu::check!(
+                    parse_template_arg_ast_recur(node, ns, "", None),
+                    "failed to parse function type argument type"
+                )?;
+                let TemplateArg::Type(ty) = inner else {
+                    cu::bail!("cannot have constexpr as function arg type");
+                };
+                func_types.push(ty);
+            }
+            Ok(TemplateArg::Type(Tree::Sub(func_types)))
+        }
+        Ast::MemberPointerType => {
+            cu::ensure!(
+                node.inner.len() == 2,
+                "member pointer type must have exactly 2 inner nodes"
+            );
+            let thisty = cu::check!(
+                parse_template_arg_ast_recur(&node.inner[0], ns, "", None),
+                "failed to parse this type for member pointer type"
+            )?;
+            let TemplateArg::Type(thisty) = thisty else {
+                cu::bail!("cannot have constexpr as the this type for member pointer type");
+            };
+            let Tree::Base(thisty) = thisty else {
+                cu::bail!("cannot have composite type as the this type for member pointer type");
+            };
+            let pointee = cu::check!(
+                parse_template_arg_ast_recur(&node.inner[1], ns, "", None),
+                "failed to parse pointee type for member pointer type"
+            )?;
+            let TemplateArg::Type(pointee) = pointee else {
+                cu::bail!("cannot have constexpr as the pointee type for member pointer type");
+            };
+            let tree = match pointee {
+                Tree::Sub(pointee) => Tree::Ptmf(thisty, pointee),
+                other => Tree::Ptmd(thisty, Box::new(other)),
+            };
+            Ok(TemplateArg::Type(tree))
         }
         _ => {
             cu::bail!("unexpected node while parsing template args: {node:#?}");
         }
+    }
+}
+fn parse_template_arg_ast_recur_paren_type(
+    node: &Node<Ast>,
+    ns: &NamespaceMaps,
+) -> cu::Result<TemplateArg<NamespacedTemplatedArg>> {
+    match &node.kind {
+        Ast::FunctionProtoType => parse_template_arg_ast_recur(node, ns, "", None),
+        _ => {
+            cu::bail!("unexpected node while parsing ParenType: {node:#?}");
+        }
+    }
+}
+
+fn to_namespaced_name_with_fallback(
+    ns: &NamespaceMaps,
+    source: &str,
+    fallback: Option<&str>,
+) -> cu::Result<NamespacedName> {
+    match to_namespaced_name(ns, source) {
+        Ok(x) => Ok(x),
+        Err(e) => {
+            let Some(source) = fallback else {
+                return Err(e);
+            };
+            match to_namespaced_name(ns, source) {
+                Ok(x) => Ok(x),
+                Err(e2) => {
+                    cu::error!(
+                        "failed to convert source to namespaced name! source={source:?}, fallback={fallback:?}, error1={e:?}, error2={e2:?}"
+                    );
+                    cu::bail!("failed to convert source to namespaced name with fallback, please see logged errors");
+                }
+            }
+        }
+    }
+}
+
+fn to_namespaced_name(ns: &NamespaceMaps, source: &str) -> cu::Result<NamespacedName> {
+    let (namespace, base) = cu::check!(
+        split_namespace(source),
+        "failed to split namespace from type name in '{source}'"
+    )?;
+    if namespace.is_empty() {
+        return Ok(NamespacedName::unnamespaced(base));
+    }
+    match ns.by_src.get(namespace) {
+        Some(namespace) => Ok(NamespacedName::namespaced(namespace, base)),
+        None => {
+            // if the namespace does not contain any templates, we can make a new one
+            let namespace = cu::check!(
+                Namespace::parse_untemplated(namespace),
+                "failed to get namespace by name, and failed to parse new one"
+            )?;
+            Ok(NamespacedName::namespaced(&namespace, base))
+        }
+    }
+}
+
+fn split_namespace(source: &str) -> cu::Result<(&str, &str)> {
+    // this won't work if the last segment
+    // has templates, which we don't allow
+    match source.rfind("::") {
+        Some(i) => {
+            let ns = &source[..i];
+            let base = &source[i + 2..];
+            cu::ensure!(
+                !base.contains('>'),
+                "base name of type cannot contain templates: {source}"
+            );
+            Ok((ns, base))
+        }
+        None => Ok(("", source)),
     }
 }

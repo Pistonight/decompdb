@@ -1,14 +1,19 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use cu::pre::*;
+use tyyaml::TreeRepr;
 
 use super::pre::*;
 
 use crate::serde_impl::ArcStr;
 
 pub struct NamespaceMaps {
+    /// Goff to the qualifier that goff is in
     pub qualifiers: GoffMap<Namespace>,
+    /// Goff to the namespace that goff is in (does not include types, etc)
     pub namespaces: GoffMap<Namespace>,
+    /// Source string to namespace
+    pub by_src: BTreeMap<String, Namespace>,
 }
 
 /// Load the namespaces in this compilation unit as a global offset map
@@ -19,23 +24,45 @@ pub fn load_namespaces(unit: &Unit) -> cu::Result<NamespaceMaps> {
         load_namespaces_root(unit, &mut ctx),
         "failed to load namespaces for {unit}"
     )?;
-    Ok(NamespaceMaps { qualifiers: ctx.offset_to_qual, namespaces: ctx.offset_to_ns })
+    let mut by_src_map: BTreeMap<String, Namespace> = Default::default();
+    for namespace in ctx.offset_to_qual.values() {
+        use std::collections::btree_map::Entry;
+
+        if namespace.contains_anonymous() {
+            continue;
+        }
+        let Ok(source) = namespace.to_cpp_typedef_source() else {
+            continue;
+        };
+
+        match by_src_map.entry(source) {
+            Entry::Vacant(e) => {
+                e.insert(namespace.clone());
+            }
+            Entry::Occupied(e) => {
+                let existing = e.get();
+                cu::ensure!(
+                    existing.source_segs_equal(namespace),
+                    "namespace with the same source does not have the same segments: {existing:?} and {namespace:?}"
+                )
+            }
+        }
+    }
+    Ok(NamespaceMaps {
+        qualifiers: ctx.offset_to_qual,
+        namespaces: ctx.offset_to_ns,
+        by_src: by_src_map,
+    })
 }
 
-fn load_namespaces_root(
-    unit: &Unit,
-    ctx: &mut LoadNamespaceCtx
-) -> cu::Result<()> {
+fn load_namespaces_root(unit: &Unit, ctx: &mut LoadNamespaceCtx) -> cu::Result<()> {
     let mut tree = unit.tree()?;
     let root = tree.root()?;
     load_namespace_recur(root, ctx)?;
     Ok(())
 }
 
-fn load_namespace_recur(
-    node: DieNode<'_, '_>,
-    ctx: &mut LoadNamespaceCtx
-) -> cu::Result<()> {
+fn load_namespace_recur(node: DieNode<'_, '_>, ctx: &mut LoadNamespaceCtx) -> cu::Result<()> {
     let entry = node.entry();
     let offset = entry.goff();
     let tag = entry.tag();
@@ -55,10 +82,12 @@ fn load_namespace_recur(
         ctx.current_qualifier.pop();
     } else {
         match tag {
-            // simply recurse
-            DW_TAG_variable | DW_TAG_compile_unit => {
+            DW_TAG_compile_unit => {
                 node.for_each_child(|child| load_namespace_recur(child, ctx))?;
-                return Ok(());
+            }
+            DW_TAG_variable => {
+                ctx.register_current_at_offset(offset);
+                node.for_each_child(|child| load_namespace_recur(child, ctx))?;
             }
             // types could be defined inside a function
             DW_TAG_subprogram => {
@@ -68,7 +97,7 @@ fn load_namespace_recur(
                 ctx.current_qualifier.pop();
             }
             DW_TAG_namespace => {
-                // doesn't need to add to map for namespace nodes
+                ctx.register_current_at_offset(offset);
                 match entry.name_opt()? {
                     Some(name) => {
                         let seg = NameSeg::Name(name.into());
@@ -87,7 +116,6 @@ fn load_namespace_recur(
             }
             _ => {
                 // ignore
-                return Ok(());
             }
         }
     }
@@ -145,7 +173,7 @@ impl NamespacedName {
     pub fn basename(&self) -> &str {
         &self.1
     }
-    
+
     pub fn basename_owned(&self) -> Arc<str> {
         Arc::clone(&self.1)
     }
@@ -165,22 +193,34 @@ impl NamespacedName {
         Ok(s)
     }
 }
-impl std::fmt::Display for NamespacedName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.0.is_empty() {
-            self.1.fmt(f)
-        } else {
-            write!(f, "{}::{}", self.0, self.1)
-        }
-    }
-}
 
 #[derive(Default, Clone, PartialEq, Eq, Hash, DebugCustom, Serialize, Deserialize)]
 #[debug("{}", self)]
 pub struct Namespace(Vec<NameSeg>);
 impl Namespace {
+    pub fn parse_untemplated(s: &str) -> cu::Result<Self> {
+        cu::ensure!(
+            !s.contains(['<', '>', '*', '&']),
+            "Namespace::parse_untemplated: cannot parse templated namespace: {s}"
+        );
+        Ok(Self(s.split("::").map(|x| NameSeg::Name(x.trim().into())).collect()))
+    }
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+    pub fn contains_anonymous(&self) -> bool {
+        self.0.iter().any(|x| x == &NameSeg::Anonymous)
+    }
+    pub fn source_segs_equal(&self, other: &Self) -> bool {
+        if self.0.len() != other.0.len() {
+            return false;
+        }
+        for (a, b) in std::iter::zip(&self.0, &other.0) {
+            if !a.source_segs_equal(b) {
+                return false;
+            }
+        }
+        true
     }
     pub fn to_cpp_typedef_source(&self) -> cu::Result<String> {
         let mut s = String::new();
@@ -237,7 +277,16 @@ impl NameSeg {
             NameSeg::Subprogram(_) => {
                 cu::bail!("to_cpp_source does not support subprogram as namespace");
             }
-            NameSeg::Anonymous => Ok(None)
+            NameSeg::Anonymous => Ok(None),
+        }
+    }
+    pub fn source_segs_equal(&self, other: &Self) -> bool {
+        match (self, other) {
+            (NameSeg::Name(a), NameSeg::Name(b)) => a == b,
+            (NameSeg::Type(_, a), NameSeg::Type(_, b)) => a == b,
+            (NameSeg::Subprogram(a), NameSeg::Subprogram(b)) => a == b,
+            (NameSeg::Anonymous, NameSeg::Anonymous) => true,
+            _ => false,
         }
     }
 }
@@ -285,6 +334,14 @@ impl NamespaceStack {
 #[rustfmt::skip]
 mod __detail {
     use super::*;
+    impl std::fmt::Display for NamespacedName { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_empty() { self.1.fmt(f) } else { write!(f, "{}::{}", self.0, self.1) }
+    } }
+    // impl TreeRepr for NamespacedName {
+    //     fn serialize_spec(&self) -> cu::Result<String> { Ok(json::stringify(self)?) }
+    //     fn deserialize_void() -> Self { Self::unnamespaced("void") }
+    //     fn deserialize_spec(spec: &str) -> cu::Result<Self> { Ok(json::parse(spec)?) }
+    // }
     impl std::fmt::Display for Namespace { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut iter = self.0.iter();
         let Some(first) = iter.next() else { return Ok(()); };
@@ -297,13 +354,9 @@ mod __detail {
         write!(f, "{first}")?; for n in iter { write!(f, "::{n}")?; }
         Ok(())
     } }
-    impl Serialize for NamespaceLiteral {
-        fn serialize<
-        S: serde::Serializer 
-        >(&self, ser: S) -> Result<S::Ok, S::Error>
-        {
-            ser.serialize_str(&self.to_string())
-            
-        }
-    }
+    // impl Serialize for NamespaceLiteral {
+    //     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+    //         ser.serialize_str(&self.to_string())
+    //     }
+    // }
 }

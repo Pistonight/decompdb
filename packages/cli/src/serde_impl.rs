@@ -51,19 +51,13 @@ impl AsRef<str> for ArcStr {
 }
 
 impl Serialize for ArcStr {
-    fn serialize<
-    S: serde::Serializer 
-    >(&self, ser: S) -> Result<S::Ok, S::Error>
-    {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         self.0.serialize(ser)
     }
 }
 
 impl<'de> Deserialize<'de> for ArcStr {
-    fn deserialize<
-    D: serde::Deserializer<'de>
-    >(de: D) -> Result<Self, D::Error>
-    {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
         return de.deserialize_str(Visitor);
         struct Visitor;
         impl<'de> serde::de::Visitor<'de> for Visitor {
