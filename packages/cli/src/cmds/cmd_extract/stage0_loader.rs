@@ -1,15 +1,18 @@
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use cu::pre::*;
 use tyyaml::{Prim, Tree};
 
 use crate::config::Config;
+use crate::demangler::Demangler;
 
 use super::pre::*;
 use super::type_structure::*;
 
 /// Load the type data from DWARF units
-pub fn load(unit: &Unit, config: Arc<Config>, nsmaps: NamespaceMaps) -> cu::Result<TypeStage0> {
+pub fn load(unit: &Unit, config: Arc<Config>, nsmaps: NamespaceMaps) -> cu::Result<Stage0> {
     let pointer_type = config.extract.pointer_type()?;
     let mut types = GoffMap::default();
     // add primitive types
@@ -26,7 +29,7 @@ pub fn load(unit: &Unit, config: Arc<Config>, nsmaps: NamespaceMaps) -> cu::Resu
     cu::check!(load_types_root(unit, &mut ctx), "failed to load types for {unit}")?;
     cu::debug!("loaded {} types from {unit}", ctx.types.len());
 
-    Ok(TypeStage0 {
+    Ok(Stage0 {
         offset: unit.offset.into(),
         name: unit.name.to_string(),
         types: ctx.types,
@@ -694,6 +697,161 @@ fn load_array_subrange_count(entry: &Die<'_, '_>) -> cu::Result<Option<u32>> {
     Ok(count)
 }
 
+fn load_symbol_recur(mut node: DieNode<'_, '_>, ctx: &mut LoadSymbolCtx) -> cu::Result<()> {
+    let entry = node.entry();
+    match entry.tag() {
+        DW_TAG_subprogram => {
+            node = load_func_symbol_at(node, ctx)?;
+        }
+        DW_TAG_variable => {
+            node = load_data_symbol_at(node, ctx)?;
+        }
+        _ => {}
+    }
+    node.for_each_child(|child| load_symbol_recur(child, ctx))
+}
+
+fn load_data_symbol_at<'a, 'b>(node: DieNode<'a, 'b>, ctx: &mut LoadSymbolCtx) -> cu::Result<DieNode<'a, 'b>> {
+    let entry = node.entry();
+    let offset = entry.goff();
+    let linkage_name = cu::check!(entry.str_opt(DW_AT_linkage_name), "failed to get linkage name for variable at {offset}")?;
+    let Some(linkage_name) = linkage_name else {
+        // ignore variables without linkage name
+        return Ok(node);
+    };
+
+    let loff = cu::check!(entry.loff_opt(DW_AT_type), "failed to get type offset for data symbol at {offset}")?;
+    let loff = match loff {
+        Some(l) => l,
+        None => {
+            // try specification
+            let spec = cu::check!(entry.loff(DW_AT_specification), "failed to get fallback specification for data symbol without type at {offset}")?;
+            let spec = cu::check!(entry.unit().entry_at(spec), "failed to get spec entry for data symbol at {offset}")?;
+            cu::check!(spec.loff(DW_AT_type), "failed to get fallback type offset from spec entry for data symbol at {offset}")?
+        }
+    };
+    let symbol = SymbolInfo::new_data(linkage_name.to_string(), entry.to_global(loff));
+    cu::check!(merge_symbol(linkage_name, symbol,ctx), "failed to merge data symbol at {offset}")?;
+    Ok(node)
+}
+
+fn load_func_symbol_at<'a, 'b>(node: DieNode<'a, 'b>, ctx: &mut LoadSymbolCtx) -> cu::Result<DieNode<'a, 'b>> {
+    let entry = node.entry();
+    let offset = entry.goff();
+    let linkage_name = cu::check!(load_func_linkage_name(&entry), "failed to get linkage name for function at {offset}")?;
+    let Some(linkage_name) = linkage_name else {
+        // ignore functions without linkage name
+        return Ok(node);
+    };
+    // return type
+    let retty = cu::check!(load_func_retty(&entry), "failed to get return type for function at {offset}")?;
+    let retty = cu::check!(retty, "missing return type for function at {offset}")?;
+    let retty = entry.to_global(retty);
+    
+    let mut args = vec![];
+    let mut referenced_types = BTreeSet::new();
+    let result = entry.for_each_child(|child| {
+        let entry = child.entry();
+        let offset = entry.goff();
+        match entry.tag() {
+            DW_TAG_formal_parameter => {
+                let name = cu::check!(entry.name_opt(), "failed to get function parameter name at {offset}")?;
+                let name = name.map(|x| x.to_string());
+                let ty = cu::check!(entry.loff_opt(DW_AT_type), "failed to get function parameter type at {offset}")?;
+                let ty = ty.map(|x| entry.to_global(x));
+                args.push((name, ty));
+            }
+            DW_TAG_variable => {
+                let ty = cu::check!(entry.loff_opt(DW_AT_type), "failed to get function local variable type at {offset}")?;
+                if let Some(loff) = ty {
+                    let ty = entry.to_global(loff);
+                    referenced_types.insert(ty);
+                }
+            }
+            _ => {
+                // ignore others
+                // DW_TAG_inlined_subroutine could potentially be useful
+                // to add comment about inlined functions
+            }
+        }
+        Ok(())
+    });
+    cu::check!(result, "failed to process function body at {offset}")?;
+
+    let symbol = SymbolInfo::new_func(linkage_name.clone(), retty, args, referenced_types);
+    cu::check!(merge_symbol(&linkage_name, symbol, ctx), "failed to merge data symbol at {offset}")?;
+    Ok(node)
+}
+
+fn load_func_linkage_name<'a>(entry: &'a Die<'_, '_>) -> cu::Result<Option<String>> {
+    let offset = entry.goff();
+    let linkage_name = cu::check!(entry.str_opt(DW_AT_linkage_name), "failed to read linkage name for function at {offset}")?;
+    if let Some(linkage_name) = linkage_name {
+        return Ok(Some(linkage_name.to_string()));
+    }
+    let abstract_origin = cu::check!(entry.loff_opt(DW_AT_abstract_origin), "failed to read abstract origin for function at {offset}")?;
+    if let Some(abstract_origin) = abstract_origin {
+        let entry = cu::check!(entry.unit().entry_at(abstract_origin), "failed to read abstract origin entry for function at {offset}")?;
+        let name = cu::check!(load_func_linkage_name(&entry), "failed to load linkage_name from abstract origin entry, for function at {offset}")?;
+        if let Some(name) = name {
+            return Ok(Some(name));
+        }
+    }
+    let specification = cu::check!(entry.loff_opt(DW_AT_specification), "failed to read specification for function at {offset}")?;
+    if let Some(specification) = specification {
+        let entry = cu::check!(entry.unit().entry_at(specification), "failed to read specification entry for function at {offset}")?;
+        let name = cu::check!(load_func_linkage_name(&entry), "failed to load linkage_name from specification entry, for function at {offset}")?;
+        if let Some(name) = name {
+            return Ok(Some(name));
+        }
+    }
+    Ok(None)
+}
+
+fn load_func_retty(entry: &Die<'_, '_>) -> cu::Result<Option<Loff>> {
+    let offset = entry.goff();
+    let loff = cu::check!(entry.loff_opt(DW_AT_type), "failed to read type for function entry at {offset}")?;
+    if let Some(loff) = loff {
+        return Ok(Some(loff));
+    }
+    let abstract_origin = cu::check!(entry.loff_opt(DW_AT_abstract_origin), "failed to read abstract origin for function at {offset}")?;
+    if let Some(abstract_origin) = abstract_origin {
+        let entry = cu::check!(entry.unit().entry_at(abstract_origin), "failed to read abstract origin entry for function at {offset}")?;
+        let loff = cu::check!(load_func_retty(&entry), "failed to load retty from abstract origin entry, for function at {offset}")?;
+        if let Some(loff) = loff {
+            return Ok(Some(loff));
+        }
+    }
+    let specification = cu::check!(entry.loff_opt(DW_AT_specification), "failed to read specification for function at {offset}")?;
+    if let Some(specification) = specification {
+        let entry = cu::check!(entry.unit().entry_at(specification), "failed to read specification entry for function at {offset}")?;
+        let loff = cu::check!(load_func_retty(&entry), "failed to load retty from specification entry, for function at {offset}")?;
+        if let Some(loff) = loff {
+            return Ok(Some(loff));
+        }
+    }
+    Ok(None)
+
+}
+
+fn merge_symbol(linkage_name: &str, mut symbol: SymbolInfo, ctx: &mut LoadSymbolCtx) -> cu::Result<()> {
+    match ctx.loaded.get_mut(linkage_name) {
+        None => {
+            let Some(address) = ctx.addresses.get(linkage_name) else {
+                // ignore symbols that aren't listed
+                return Ok(())
+            };
+            symbol.address = *address;
+            ctx.loaded.insert(linkage_name.to_string(), symbol);
+        }
+        Some(old_symbol) => {
+            cu::ensure!(&symbol == old_symbol, "symbol info mismatch when merging");
+            old_symbol.link_name = linkage_name.to_string();
+        }
+    }
+    Ok(())
+}
+
 fn make_ptr(goff: Goff) -> Type0 {
     Type0::Tree(Tree::ptr(Tree::Base(goff)))
 }
@@ -703,4 +861,13 @@ struct LoadTypeCtx {
     config: Arc<Config>,
     types: GoffMap<Type0>,
     nsmaps: NamespaceMaps,
+}
+
+struct LoadSymbolCtx {
+    damangler: Arc<Demangler>,
+    loaded: BTreeMap<String, SymbolInfo>,
+    addresses: Arc<BTreeMap<String, u32>>,
+    merges: Vec<(Goff, Goff)>,
+
+
 }

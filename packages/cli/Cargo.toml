@@ -21,6 +21,7 @@ spin = "0.10.0"
 tokio = "1"
 shell-words = "1.1.0"
 clang-ast = "0.1.33"
+dashmap = "6.1.0"
 
 [[bin]]
 name = "decompdb"

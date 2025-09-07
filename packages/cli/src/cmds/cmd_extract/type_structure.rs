@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use cu::pre::*;
@@ -174,12 +175,13 @@ impl Type1 {
     }
 }
 
-pub struct TypeStage0 {
+pub struct Stage0 {
     pub offset: usize,
     pub name: String,
     pub types: GoffMap<Type0>,
     pub config: Arc<Config>,
     pub ns: NamespaceMaps,
+    pub symbols: BTreeMap<String, SymbolInfo>
 }
 
 /// Raw definition of types parsed directly from DWARF
@@ -558,6 +560,43 @@ pub enum TemplateArg<T: TreeRepr> {
     Const(i64),
     #[display("{}", _0)]
     Type(Tree<T>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SymbolInfo {
+    pub address: u32,
+    pub link_name: String,
+    pub ty: Goff,
+    pub is_func: bool,
+    pub args: Vec<(Option<String>, Option<Goff>)>,
+    pub referenced_types: BTreeSet<Goff>,
+}
+
+impl SymbolInfo {
+    pub fn new_data(linkage_name: String, ty: Goff) -> Self {
+        Self { 
+            address: 0,
+            link_name: linkage_name,
+            ty,
+            is_func: false, 
+            args: vec![],
+            referenced_types: Default::default(),
+        }
+    }
+    pub fn new_func(
+        linkage_name: String, ty: Goff,
+        args: Vec<(Option<String>, Option<Goff>)>,
+        referenced_types: BTreeSet<Goff>
+    ) -> Self {
+        Self { 
+            address: 0,
+            link_name: linkage_name,
+            ty,
+            is_func: true, 
+            args,
+            referenced_types,
+        }
+    }
 }
 
 pub fn tree_merge_checked(a: &Tree<Goff>, b: &Tree<Goff>, merges: &mut MergeQueue) -> cu::Result<()> {
