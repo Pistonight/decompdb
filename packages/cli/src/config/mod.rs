@@ -100,6 +100,9 @@ pub struct CfgCsv {
     pub address_column: usize,
     /// Which column is the symbol column, 0-indexed
     pub symbol_column: usize,
+    /// Skip first X rows when parsing
+    #[serde(default)]
+    pub skip_rows: usize,
 }
 
 fn resolve_path(base: &Path, path: &mut PathBuf) -> cu::Result<()> {

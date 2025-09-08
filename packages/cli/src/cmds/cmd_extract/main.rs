@@ -4,10 +4,12 @@ use std::sync::Arc;
 use cu::pre::*;
 
 use crate::config::Config;
+use crate::demangler::Demangler;
+use crate::symlist::SymbolList;
 
 use super::namespace;
 use super::pre::*;
-use super::stage0_clang_parse::{self, CompileCommand};
+// use super::stage0_clang_parse::{self, CompileCommand};
 use super::stage0_loader;
 // use super::type0_compiler;
 
@@ -41,18 +43,25 @@ pub fn run(config: Config) -> cu::Result<()> {
 async fn run_internal(config: Config) -> cu::Result<()> {
     let config = Arc::new(config);
     cu::fs::make_dir(&config.paths.extract_output)?;
-    let compile_commands = {
-        let cc = cu::fs::read_string(&config.paths.compdb)?;
-        let cc_vec = json::parse::<Vec<CompileCommand>>(&cc)?;
-        let mut cc_map = BTreeMap::new();
-        for c in cc_vec {
-            cc_map.insert(c.file.clone(), c);
-        }
-        cc_map
-    };
+    // let compile_commands = {
+    //     let cc = cu::fs::read_string(&config.paths.compdb)?;
+    //     let cc_vec = json::parse::<Vec<CompileCommand>>(&cc)?;
+    //     let mut cc_map = BTreeMap::new();
+    //     for c in cc_vec {
+    //         cc_map.insert(c.file.clone(), c);
+    //     }
+    //     cc_map
+    // };
 
     let bytes: Arc<[u8]> = cu::fs::read(&config.paths.elf)?.into();
     let dwarf = Dwarf::try_parse(bytes)?;
+
+    let demangler = Arc::new(Demangler::try_new(config.paths.extract_output.join("demangler_cache.json"))?);
+    let mut symbol_list = SymbolList::default();
+    symbol_list.load_data(&config.paths.data_csv)?;
+    symbol_list.load_func(&config.paths.functions_csv, demangler).await?;
+    let symbol_list = Arc::new(symbol_list);
+
 
     let units = {
         let mut units = Vec::new();
@@ -72,9 +81,10 @@ async fn run_internal(config: Config) -> cu::Result<()> {
 
         for unit in units {
             let config = Arc::clone(&config);
+            let symbol_list = Arc::clone(&symbol_list);
             let handle = pool.spawn(async move {
                 let ns = namespace::load_namespaces(&unit)?;
-                let stage0 = stage0_loader::load(&unit, config, ns)?;
+                let stage0 = stage0_loader::load(&unit, config, ns, symbol_list)?;
                 cu::Ok(stage0)
             });
             handles.push(handle);
@@ -96,18 +106,18 @@ async fn run_internal(config: Config) -> cu::Result<()> {
         stage1s
     };
 
-    let stage1 = {
-        let bar = cu::progress_bar(stage0.len(), "stage0 -> stage1: parsing types");
-        for (i, stage0) in stage0.into_iter().enumerate() {
-            let name = stage0.name.clone();
-            cu::progress!(&bar, i, "{name}");
-            let command = cu::check!(compile_commands.get(&name), "cannot find compile command for {name}")?;
-            let stage1 = cu::check!(
-                stage0_clang_parse::parse_type(stage0, command).await,
-                "failed to parse types for {name}"
-            )?;
-        }
-    };
+    // let stage1 = {
+    //     let bar = cu::progress_bar(stage0.len(), "stage0 -> stage1: parsing types");
+    //     for (i, stage0) in stage0.into_iter().enumerate() {
+    //         let name = stage0.name.clone();
+    //         cu::progress!(&bar, i, "{name}");
+    //         let command = cu::check!(compile_commands.get(&name), "cannot find compile command for {name}")?;
+    //         let stage1 = cu::check!(
+    //             stage0_clang_parse::parse_type(stage0, command).await,
+    //             "failed to parse types for {name}"
+    //         )?;
+    //     }
+    // };
 
     cu::hint!("done");
 

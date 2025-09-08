@@ -11,6 +11,7 @@ path = "../../../botw-decomp/data/uking_functions.csv"
 base-address = 0x7100000000
 address-column = 0
 symbol-column = 3
+skip-rows = 1
 
 [paths.data-csv]
 path = "../../../botw-decomp/data/data_symbols.csv"

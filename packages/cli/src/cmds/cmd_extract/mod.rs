@@ -9,7 +9,7 @@ mod bucket;
 mod name_comparator;
 mod namespace;
 
-mod stage0_clang_parse;
+// mod stage0_clang_parse;
 mod stage0_loader;
 // mod type0_compiler;
 // mod type_compiler;

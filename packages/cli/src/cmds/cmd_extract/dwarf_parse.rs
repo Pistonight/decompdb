@@ -188,6 +188,7 @@ impl Unit {
             AttributeValue::Data4(x) => Ok(x as u64),
             AttributeValue::Data8(x) => Ok(x),
             AttributeValue::Udata(x) => Ok(x),
+            AttributeValue::Addr(x) => Ok(x),
             // this is used for vtable elem location
             AttributeValue::Exprloc(expr) => {
                 let mut ops = expr.operations(self.unit.encoding());
@@ -198,7 +199,7 @@ impl Unit {
                 };
                 Ok(value)
             }
-            _ => cu::bail!("expecting unsigned data for entry {offset}, attr {at}"),
+            other => cu::bail!("expecting unsigned data for entry {offset}, attr {at}, got: {other:?}"),
         }
     }
 }
@@ -477,6 +478,21 @@ impl<'x> Die<'x, '_> {
         };
 
         Ok(prim)
+    }
+
+    pub fn is_inlined(&self) -> cu::Result<bool> {
+        let offset = self.goff();
+        let inline = cu::check!(self.entry.attr_value(DW_AT_inline), 
+            "failed to read DW_AT_inline for entry at offset {offset}")?;
+        match inline {
+            None => Ok(false),
+            Some(AttributeValue::Inline(x)) => {
+                Ok(matches!(x, DW_INL_inlined | DW_INL_declared_inlined))
+            }
+            _ => {
+            cu::bail!("expecting DW_AT_inline to be an inline attribute at offset {offset}")
+            }
+        }
     }
 
     /// Execute f on each direct child node (does not include the input node)

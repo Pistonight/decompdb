@@ -568,7 +568,7 @@ pub struct SymbolInfo {
     pub link_name: String,
     pub ty: Goff,
     pub is_func: bool,
-    pub args: Vec<(Option<String>, Option<Goff>)>,
+    pub args: Vec<(Option<String>, Goff)>,
     pub referenced_types: BTreeSet<Goff>,
 }
 
@@ -585,7 +585,7 @@ impl SymbolInfo {
     }
     pub fn new_func(
         linkage_name: String, ty: Goff,
-        args: Vec<(Option<String>, Option<Goff>)>,
+        args: Vec<(Option<String>, Goff)>,
         referenced_types: BTreeSet<Goff>
     ) -> Self {
         Self { 
@@ -596,6 +596,14 @@ impl SymbolInfo {
             args,
             referenced_types,
         }
+    }
+    pub fn merge(&mut self, other: &Self) -> cu::Result<()> {
+        cu::ensure!(self.is_func == other.is_func, "cannot merge data/func symbol info");
+        cu::ensure!(self.link_name == other.link_name, "cannot merge symbol info with different linkage names: {} != {}", self.link_name, other.link_name);
+        cu::ensure!(self.ty == other.ty, "cannot merge symbol info with different types");
+        cu::ensure!(self.args == other.args, "cannot merge symbol info with different args");
+        self.referenced_types.extend(other.referenced_types.clone());
+        Ok(())
     }
 }
 

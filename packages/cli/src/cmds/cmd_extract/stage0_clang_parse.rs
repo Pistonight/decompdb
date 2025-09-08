@@ -16,7 +16,7 @@ const PARSE_TYPE_TOKEN: &str = "____stage0_clang_type_parse";
 /// Parse string type names into structured template specialization data,
 /// using clang. This is needed because DWARF only contains the stringified
 /// type name for declarations
-pub async fn parse_type(stage0: TypeStage0, command: &CompileCommand) -> cu::Result<TypeStage1> {
+pub async fn parse_type(stage0: Stage0, command: &CompileCommand) -> cu::Result<TypeStage1> {
     let command = cu::check!(
         TypeParseCommand::try_new(&stage0.config, command),
         "failed to create type parse command for {}",
