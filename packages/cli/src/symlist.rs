@@ -11,6 +11,9 @@ pub struct SymbolList {
 }
 
 impl SymbolList {
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
     pub fn load_data(&mut self, config: &CfgCsv) -> cu::Result<()> {
         let map = cu::check!(load_symbol_csv(config), "failed to load data symbols")?;
         self.map.extend(map);

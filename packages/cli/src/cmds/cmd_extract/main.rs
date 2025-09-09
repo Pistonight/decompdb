@@ -22,20 +22,6 @@ pub struct CmdExtract {
 }
 pub fn run(config: Config) -> cu::Result<()> {
     cu::co::run(async move {
-        // we will leak memory if panic, but otherwise this is safe
-        // let bytes: Box<[u8]> = cu::fs::read(&config.paths.elf)?.into();
-        // let bytes = Box::into_raw(bytes);
-        // let dwarf = parse_dwarf(unsafe { &*bytes })?;
-        // let dwarf = Box::into_raw(Box::new(dwarf));
-        //
-        // let result = run_internal(config, unsafe { &*dwarf }).await;
-        //
-        // let dwarf = unsafe { Box::from_raw(dwarf) };
-        // drop(dwarf);
-        // let bytes = unsafe { Box::from_raw(bytes) };
-        // drop(bytes);
-        //
-        // result
         run_internal(config).await
     })
 }
@@ -59,8 +45,12 @@ async fn run_internal(config: Config) -> cu::Result<()> {
     let demangler = Arc::new(Demangler::try_new(config.paths.extract_output.join("demangler_cache.json"))?);
     let mut symbol_list = SymbolList::default();
     symbol_list.load_data(&config.paths.data_csv)?;
-    symbol_list.load_func(&config.paths.functions_csv, demangler).await?;
+    symbol_list.load_func(&config.paths.functions_csv, Arc::clone(&demangler)).await?;
     let symbol_list = Arc::new(symbol_list);
+    cu::info!("loaded {} symbols from listing", symbol_list.len());
+    if let Err(e) = demangler.flush_cache() {
+        cu::warn!("failed to flush demangler cache: {e:?}");
+    }
 
 
     let units = {

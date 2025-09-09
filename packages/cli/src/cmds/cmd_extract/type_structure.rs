@@ -27,7 +27,7 @@ pub enum TypeA {
     /// Typedef <other> name; Other is global offset in debug info
     Typedef(String, Goff),
     /// Enum, could be anonymous
-    Enum(Option<String>, TypeAEnum),
+    Enum(Option<String>, Type1Enum),
     /// Declaration of an enum
     EnumDecl(String),
     /// Union, could be anonymous
@@ -80,40 +80,19 @@ impl TypeA {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TypeAEnum {
-    /// Base type, used to determine the size
-    pub byte_size: u32,
-    /// Enumerators of the enum, in the order they appear in DWARF
-    pub enumerators: Vec<Enumerator>,
-}
-impl TypeAEnum {
-    pub fn merge_from(&mut self, other: &Self) -> cu::Result<()> {
-        cu::ensure!(
-            self.byte_size == other.byte_size,
-            "cannot merge 2 enums of different byte size: 0x{:x} != 0x{:x}",
-            self.byte_size,
-            other.byte_size
-        );
-        // we don't have any "partial definitions" for enums observed yet
-        cu::ensure!(
-            self.enumerators == other.enumerators,
-            "cannot merge 2 enums of different enumerators: {:#?}, and {:#?}",
-            self.enumerators,
-            other.enumerators
-        );
-        Ok(())
-    }
-}
-
-pub struct TypeStage1 {
+pub struct Stage1 {
     pub offset: usize,
     pub name: String,
     pub types: GoffMap<Type1>,
     pub config: Arc<Config>,
 }
 
-/// Type0 + names resolved by clang
+/// Type definitons in Stage1
+///
+/// - Aliases are merged & eliminated
+/// - Trees are flattened: A Tree::Base definitely points to a 
+///   primitive, enum, union or struct.
+/// - Typedefs to composite types are eliminated
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type1 {
     /// Pritimive type
@@ -122,7 +101,7 @@ pub enum Type1 {
     /// Name could have template args
     Typedef(NamespacedTemplatedName, Goff),
     /// Enum. The name does not include template args. could be anonymous
-    Enum(Option<NamespacedName>, Type0Enum),
+    Enum(Option<NamespacedName>, Type1Enum),
     /// Declaration of an enum.
     /// Name includes template args
     EnumDecl(NamespacedTemplatedName),
@@ -136,8 +115,6 @@ pub enum Type1 {
     /// Declaration of struct or class.
     /// Name includes template args
     StructDecl(NamespacedTemplatedName),
-    /// Composition of other types
-    Tree(Tree<Goff>),
 }
 impl Type1 {
     pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
@@ -184,7 +161,10 @@ pub struct Stage0 {
     pub symbols: BTreeMap<String, SymbolInfo>
 }
 
-/// Raw definition of types parsed directly from DWARF
+/// Type definitions in Stage0
+///
+/// - Trees are not flattened: for example, A Tree::Base could be pointing to a Goff that is a pointer type.
+/// - Declarations and typedefs could have templates embedded in the name
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type0 {
     /// Pritimive type
@@ -213,6 +193,69 @@ pub enum Type0 {
     Alias(Goff),
 }
 
+impl Type0 {
+    /// Run goff conversion on nested type data
+    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> { 
+        match self {
+            Type0::Prim(_) => {}
+            Type0::Typedef(_, inner) => {
+                *inner = cu::check!(f(*inner), "failed to map typedef -> {inner}")?;
+            }
+            Type0::Alias(inner) => {
+                *inner = cu::check!(f(*inner), "failed to map alias -> {inner}")?;
+            }
+            Type0::Enum(_, _) => { }
+            Type0::EnumDecl(_, _) => {}
+            Type0::Union(_, data) => {
+                cu::check!(data.map_goff(&f), "failed to map union")?;
+            }
+            Type0::UnionDecl(_, _) => {}
+            Type0::Struct(_, data) => {
+                cu::check!(data.map_goff(&f), "failed to map struct")?;
+            }
+            Type0::StructDecl(_, _) => {}
+            Type0::Tree(tree) => {
+                cu::check!(
+                    tree.for_each_mut(|r| {
+                        *r = f(*r)?;
+                        cu::Ok(())
+                    }),
+                    "failed to map tree"
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Type1Enum {
+    /// Base type, used to determine the size
+    pub byte_size: u32,
+    /// Enumerators of the enum, in the order they appear in DWARF
+    pub enumerators: Vec<Enumerator>,
+}
+impl Type1Enum {
+    pub fn merge_from(&mut self, other: &Self) -> cu::Result<()> {
+        cu::ensure!(
+            self.byte_size == other.byte_size,
+            "cannot merge 2 enums of different byte size: 0x{:x} != 0x{:x}",
+            self.byte_size,
+            other.byte_size
+        );
+        // we don't have any "partial definitions" for enums observed yet
+        cu::ensure!(
+            self.enumerators == other.enumerators,
+            "cannot merge 2 enums of different enumerators: {:#?}, and {:#?}",
+            self.enumerators,
+            other.enumerators
+        );
+        Ok(())
+    }
+}
+
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Type0Enum {
     /// Base type, used to determine the size
@@ -239,13 +282,16 @@ pub struct Type0Union {
     /// Byte size of the union (should be size of the largest member)
     pub byte_size: u32,
     /// Union members. The members must have offset of 0 and special of None
-    pub members: Vec<Type0Member>,
+    pub members: Vec<Member>,
 }
 
 impl Type0Union {
     pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
-        for m in &mut self.members {
-            cu::check!(m.map_goff(&f), "failed to map union members")?;
+        for targ in &mut self.template_args {
+            cu::check!(targ.map_goff(&f), "failed to map union template args")?;
+        }
+        for member in &mut self.members {
+            cu::check!(member.map_goff(&f), "failed to map union members")?;
         }
         Ok(())
     }
@@ -300,10 +346,24 @@ pub struct Type0Struct {
     /// Dtors will have an index of 0
     pub vtable: Vec<(usize, VtableEntry)>,
     /// Members of the struct
-    pub members: Vec<Type0Member>,
+    pub members: Vec<Member>,
 }
 
 impl Type0Struct {
+    /// Run goff conversion on nested type data
+    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> { 
+        for targ in &mut self.template_args {
+            cu::check!(targ.map_goff(&f), "failed to map struct template args")?;
+        }
+        for (_, ventry) in &mut self.vtable {
+            cu::check!(ventry.map_goff(&f), "failed to map struct vtable entries")?;
+        }
+        for member in &mut self.members {
+            cu::check!(member.map_goff(&f), "failed to map struct members")?;
+        }
+        Ok(())
+    }
+
     pub fn merge_checked(&self, other: &Self, merges: &mut MergeQueue) -> cu::Result<()> {
         self.check_merge_precondition(other)?;
         let mut mq = MergeQueue::default();
@@ -409,49 +469,60 @@ impl Type0Struct {
     }
 }
 
+/// A struct or union member
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Type0Member {
+pub struct Member {
     /// Offset of the member within the struct. 0 For union.
     pub offset: u32,
-    /// Name of the member. Could be None for anonymous union as member
+    /// Name of the member. Could be None for anonymous typed member
     pub name: Option<Arc<str>>,
-    /// Type of the member
-    pub ty: Goff,
-    /// Special-case member
+    /// Type of the member. Might be unflattened, depending on the stage
+    pub ty: Tree<Goff>,
+    /// Special-case member, None for union
     pub special: Option<SpecialMember>,
 }
-
-impl Type0Member {
+impl Member {
     pub fn is_base(&self) -> bool {
         matches!(self.special, Some(SpecialMember::Base))
     }
-    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
-        self.ty = cu::check!(f(self.ty), "failed to map member goff {}", self.ty)?;
-        Ok(())
-    }
-    pub fn merge_checked(&self, other: &Self, merges: &mut MergeQueue) -> cu::Result<()> {
-        cu::ensure!(
-            self.offset == other.offset,
-            "member offsets are not equal: {} != {}",
-            self.offset,
-            other.offset
-        );
-        cu::ensure!(
-            self.name == other.name,
-            "member names are not equal: {:?} != {:?}",
-            self.name,
-            other.name
-        );
-        cu::ensure!(
-            self.special == other.special,
-            "member special types are not equal: {:?} != {:?}",
-            self.special,
-            other.special
-        );
-        merges.push(self.ty, other.ty)?;
+
+    /// Run goff conversion on nested type data
+    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> { 
+        cu::check!(
+            self.ty.for_each_mut(|r| {
+                *r = f(*r)?;
+                cu::Ok(())
+            }),
+            "failed to map member type"
+        )?;
         Ok(())
     }
 }
+
+// impl Member {
+//     pub fn merge_checked(&self, other: &Self, merges: &mut MergeQueue) -> cu::Result<()> {
+//         cu::ensure!(
+//             self.offset == other.offset,
+//             "member offsets are not equal: {} != {}",
+//             self.offset,
+//             other.offset
+//         );
+//         cu::ensure!(
+//             self.name == other.name,
+//             "member names are not equal: {:?} != {:?}",
+//             self.name,
+//             other.name
+//         );
+//         cu::ensure!(
+//             self.special == other.special,
+//             "member special types are not equal: {:?} != {:?}",
+//             self.special,
+//             other.special
+//         );
+//         merges.push(self.ty, other.ty)?;
+//         Ok(())
+//     }
+// }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VtableEntry {
@@ -555,21 +626,47 @@ impl TreeRepr for NamespacedTemplatedArg {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Display, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TemplateArg<T: TreeRepr> {
-    // Constant value. Could also be boolean (0=false, 1=true)
+    /// Constant value. Could also be boolean (0=false, 1=true)
     #[display("{}", _0)]
     Const(i64),
+    /// Type value. Could be unflattened depending on the stage
     #[display("{}", _0)]
     Type(Tree<T>),
 }
 
+impl TemplateArg<Goff> {
+    /// Run goff conversion on nested type data
+    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> { 
+        let Self::Type(tree) = self else {
+            return Ok(());
+        };
+        cu::check!(
+            tree.for_each_mut(|r| {
+                *r = f(*r)?;
+                cu::Ok(())
+            }),
+            "failed to map template arg type"
+        )?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SymbolInfo {
+    /// Address of the symbol (offset in the original binary)
     pub address: u32,
+    /// Name for linking (linkage name)
     pub link_name: String,
-    pub ty: Goff,
-    pub is_func: bool,
-    pub args: Vec<(Option<String>, Goff)>,
-    pub referenced_types: BTreeSet<Goff>,
+    /// Type of the symbol. For functions, this is a Tree::Sub.
+    /// Could be unflattened depending on the stage.
+    pub ty: Tree<Goff>,
+    /// Function parameter names, if the symbol is a function.
+    /// Empty string could exists for unnamed parameters,
+    /// depending on the stage.
+    pub param_names: Vec<String>,
+    // TODO: this could be useful if we want to GC types
+    // to those only referenced by symbols
+    // pub referenced_types: BTreeSet<Goff>,
 }
 
 impl SymbolInfo {
@@ -577,24 +674,24 @@ impl SymbolInfo {
         Self { 
             address: 0,
             link_name: linkage_name,
-            ty,
-            is_func: false, 
-            args: vec![],
-            referenced_types: Default::default(),
+            ty: Tree::Base(ty),
+            // is_func: false, 
+            param_names: vec![],
+            // referenced_types: Default::default(),
         }
     }
     pub fn new_func(
-        linkage_name: String, ty: Goff,
-        args: Vec<(Option<String>, Goff)>,
-        referenced_types: BTreeSet<Goff>
+        linkage_name: String, 
+        types: Vec<Goff>,
+        param_names: Vec<String>,
+        // referenced_types: BTreeSet<Goff>
     ) -> Self {
         Self { 
             address: 0,
             link_name: linkage_name,
-            ty,
-            is_func: true, 
-            args,
-            referenced_types,
+            ty: Tree::Sub(types.into_iter().map(Tree::Base).collect()),
+            param_names,
+            // referenced_types,
         }
     }
     pub fn merge(&mut self, other: &Self) -> cu::Result<()> {

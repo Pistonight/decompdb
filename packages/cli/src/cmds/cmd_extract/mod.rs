@@ -17,6 +17,8 @@ mod stage0_loader;
 // mod type_linker;
 mod type_structure;
 
+mod stage1;
+
 mod pre {
     pub use super::dwarf_parse::*;
     pub use super::namespace::{NameSeg, Namespace, NamespaceLiteral, NamespaceMaps, NamespacedName};

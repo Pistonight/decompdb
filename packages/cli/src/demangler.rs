@@ -46,13 +46,18 @@ impl Demangler {
         // note this will lose a few entries in the end, which is fine
         let c = self.modification_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if c >= 5000 {
-            let mut ordered = BTreeMap::new();
-            ordered.extend(self.cache.clone());
-            let cache_string = json::stringify_pretty(&ordered)?;
-            cu::fs::write(&self.cache_path, cache_string)?;
+            self.flush_cache()?;
             self.modification_count.store(0, std::sync::atomic::Ordering::Release);
         }
         Ok(output)
+    }
+
+    pub fn flush_cache(&self) -> cu::Result<()> {
+        let mut ordered = BTreeMap::new();
+        ordered.extend(self.cache.clone());
+        let cache_string = json::stringify_pretty(&ordered)?;
+        cu::fs::write(&self.cache_path, cache_string)?;
+        Ok(())
     }
 
     fn demangle_with_cxxfilt(&self, symbol: &str) -> cu::Result<String> {
