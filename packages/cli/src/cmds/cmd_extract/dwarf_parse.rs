@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use cu::pre::*;
@@ -555,6 +555,7 @@ pub fn is_type_tag(tag: Tag) -> bool {
 pub const UNSIZED: u32 = u32::MAX;
 
 pub type GoffMap<T> = BTreeMap<Goff, T>;
+pub type GoffSet = BTreeSet<Goff>;
 
 /// Local offset into a Compilation Unit in DWARF
 #[rustfmt::skip]

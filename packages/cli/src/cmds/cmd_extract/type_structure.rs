@@ -165,7 +165,7 @@ pub struct Stage0 {
 ///
 /// - Trees are not flattened: for example, A Tree::Base could be pointing to a Goff that is a pointer type.
 /// - Declarations and typedefs could have templates embedded in the name
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type0 {
     /// Pritimive type
     Prim(Prim),
@@ -256,7 +256,7 @@ impl Type1Enum {
 }
 
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Type0Enum {
     /// Base type, used to determine the size
     pub byte_size_or_base: Result<u32, Goff>,
@@ -694,14 +694,25 @@ impl SymbolInfo {
             // referenced_types,
         }
     }
-    pub fn merge(&mut self, other: &Self) -> cu::Result<()> {
-        cu::ensure!(self.is_func == other.is_func, "cannot merge data/func symbol info");
-        cu::ensure!(self.link_name == other.link_name, "cannot merge symbol info with different linkage names: {} != {}", self.link_name, other.link_name);
-        cu::ensure!(self.ty == other.ty, "cannot merge symbol info with different types");
-        cu::ensure!(self.args == other.args, "cannot merge symbol info with different args");
-        self.referenced_types.extend(other.referenced_types.clone());
+    /// Run goff conversion on nested type data
+    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> { 
+        cu::check!(
+            self.ty.for_each_mut(|r| {
+                *r = f(*r)?;
+                cu::Ok(())
+            }),
+            "failed to map symbol type"
+        )?;
         Ok(())
     }
+    // pub fn merge(&mut self, other: &Self) -> cu::Result<()> {
+    //     cu::ensure!(self.is_func == other.is_func, "cannot merge data/func symbol info");
+    //     cu::ensure!(self.link_name == other.link_name, "cannot merge symbol info with different linkage names: {} != {}", self.link_name, other.link_name);
+    //     cu::ensure!(self.ty == other.ty, "cannot merge symbol info with different types");
+    //     cu::ensure!(self.args == other.args, "cannot merge symbol info with different args");
+    //     self.referenced_types.extend(other.referenced_types.clone());
+    //     Ok(())
+    // }
 }
 
 pub fn tree_merge_checked(a: &Tree<Goff>, b: &Tree<Goff>, merges: &mut MergeQueue) -> cu::Result<()> {

@@ -8,7 +8,7 @@ use super::pre::*;
 // using "0" as speical value for resolving - this is valid because sizeof must return non-zero
 const RESOLVING: u32 = 0;
 
-pub fn resolve_enum_size(stage0: &mut Stage0) -> cu::Result<()> {
+pub fn resolve_enum_sizes(stage0: &mut Stage0) -> cu::Result<()> {
     let mut resolver = cu::check!(SizeResolver::try_new(&stage0.config), "failed to create size resolver")?;
     for (goff, data) in &stage0.types {
         let Type0::Enum(_, data) = data else {

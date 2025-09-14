@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cu::pre::*;
 use dashmap::DashMap;
@@ -44,10 +44,10 @@ impl Demangler {
         self.cache.insert(symbol.to_string(), output.clone());
 
         // note this will lose a few entries in the end, which is fine
-        let c = self.modification_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let c = self.modification_count.fetch_add(1, Ordering::SeqCst);
         if c >= 5000 {
             self.flush_cache()?;
-            self.modification_count.store(0, std::sync::atomic::Ordering::Release);
+            self.modification_count.store(0, Ordering::Release);
         }
         Ok(output)
     }

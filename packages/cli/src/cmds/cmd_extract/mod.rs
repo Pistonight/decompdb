@@ -9,6 +9,7 @@ mod bucket;
 mod name_comparator;
 mod namespace;
 mod deduper;
+mod garbage_collector;
 
 // mod stage0_clang_parse;
 mod stage0_loader;

@@ -5,6 +5,7 @@ use cu::pre::*;
 use fxhash::FxHasher;
 
 use super::pre::*;
+use super::type_structure::*;
 use super::bucket::GoffBuckets;
 
 /// Dedupe goffs that map to the same type data
@@ -13,48 +14,13 @@ F
 : Fn(&mut T, &GoffBuckets) -> cu::Result<()>
 >(
     mut map: GoffMap<T>,
+    mut buckets: GoffBuckets,
+    symbols: &mut BTreeMap<String, SymbolInfo>,
     mapper: F
 ) -> cu::Result<GoffMap<T>> {
-    let mut buckets = GoffBuckets::default();
-
     loop {
-
-        let mut hash_map = BTreeMap::default();
-        let mut has_collision = false;
-        for (goff, t) in &map {
-            let mut hasher = FxHasher::default();
-            t.hash(&mut hasher);
-            let h = hasher.finish();
-            let set = hash_map.entry(h).or_insert_with(|| {
-                has_collision = true;
-                BTreeSet::new()
-            });
-            set.insert(*goff);
-        }
-
-        if !has_collision {
-            return Ok(map);
-        }
-
-        let mut has_merges = false;
-        for keys in hash_map.into_values() {
-            let keys = keys.into_iter().collect::<Vec<_>>();
-            for (i, k) in keys.iter().copied().enumerate() {
-                for j in keys.iter().skip(i+1).copied() {
-                    let t1 = map.get(&k).unwrap();
-                    let t2 = map.get(&j).unwrap();
-                    if t1 == t2 {
-                        cu::check!(buckets.merge(k, j), "failed to merge goff {k} and {j}")?;
-                        has_merges = true;
-                    }
-                }
-            }
-        }
-
-        if !has_merges {
-            return Ok(map);
-        }
-
+        // must run mapper first to make sure collision and merge check
+        // picks up the change
         let mut new_map = GoffMap::default();
         for (goff, mut t) in map {
             use std::collections::btree_map::Entry;
@@ -72,5 +38,45 @@ F
         }
 
         map = new_map;
+
+        let mut hash_map = BTreeMap::default();
+        let mut has_collision = false;
+        for (goff, t) in &map {
+            let mut hasher = FxHasher::default();
+            t.hash(&mut hasher);
+            let h = hasher.finish();
+            let set = hash_map.entry(h).or_insert_with(|| {
+                has_collision = true;
+                BTreeSet::new()
+            });
+            set.insert(*goff);
+        }
+
+        let mut has_merges = false;
+        if has_collision {
+            for keys in hash_map.into_values() {
+                let keys = keys.into_iter().collect::<Vec<_>>();
+                for (i, k) in keys.iter().copied().enumerate() {
+                    for j in keys.iter().skip(i+1).copied() {
+                        let t1 = map.get(&k).unwrap();
+                        let t2 = map.get(&j).unwrap();
+                        if t1 == t2 {
+                            cu::check!(buckets.merge(k, j), "failed to merge goff {k} and {j}")?;
+                            has_merges = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if has_merges {
+            continue;
+        }
+
+        for symbol in symbols.values_mut() {
+            cu::check!(symbol.map_goff(|k| Ok(buckets.primary_fallback(k))), "symbol mapping failed when deduping")?;
+        }
+
+        return Ok(map);
     }
 }
