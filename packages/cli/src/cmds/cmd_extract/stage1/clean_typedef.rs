@@ -2,9 +2,14 @@ use cu::pre::*;
 use tyyaml::Tree;
 
 use super::pre::*;
+use super::super::bucket::GoffBuckets;
 
-/// Eliminate typedef to composite (tree) types
-pub fn clean_typedef(stage0: &mut Stage0) -> cu::Result<()> {
+/// Eliminate and merge:
+/// - Typedef to a composite type
+/// - Aliases
+/// - Tree::Base
+pub fn clean_typedefs(stage0: &mut Stage0) -> cu::Result<()> {
+    let mut buckets = GoffBuckets::default();
     let mut to_clean = vec![];
     let mut cache = GoffMap::default();
     for (goff, data) in &stage0.types {
@@ -25,6 +30,8 @@ pub fn clean_typedef(stage0: &mut Stage0) -> cu::Result<()> {
 
     Ok(())
 }
+
+// pub fn resolve_alias(goff: Goff
 
 pub fn is_tree(goff: Goff, stage0: &Stage0, 
     cache: &mut GoffMap<bool>,

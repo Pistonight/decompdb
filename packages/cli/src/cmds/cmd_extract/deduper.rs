@@ -1,0 +1,76 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{Hash, Hasher};
+
+use cu::pre::*;
+use fxhash::FxHasher;
+
+use super::pre::*;
+use super::bucket::GoffBuckets;
+
+/// Dedupe goffs that map to the same type data
+pub fn dedupe<T : Eq + Hash,
+F
+: Fn(&mut T, &GoffBuckets) -> cu::Result<()>
+>(
+    mut map: GoffMap<T>,
+    mapper: F
+) -> cu::Result<GoffMap<T>> {
+    let mut buckets = GoffBuckets::default();
+
+    loop {
+
+        let mut hash_map = BTreeMap::default();
+        let mut has_collision = false;
+        for (goff, t) in &map {
+            let mut hasher = FxHasher::default();
+            t.hash(&mut hasher);
+            let h = hasher.finish();
+            let set = hash_map.entry(h).or_insert_with(|| {
+                has_collision = true;
+                BTreeSet::new()
+            });
+            set.insert(*goff);
+        }
+
+        if !has_collision {
+            return Ok(map);
+        }
+
+        let mut has_merges = false;
+        for keys in hash_map.into_values() {
+            let keys = keys.into_iter().collect::<Vec<_>>();
+            for (i, k) in keys.iter().copied().enumerate() {
+                for j in keys.iter().skip(i+1).copied() {
+                    let t1 = map.get(&k).unwrap();
+                    let t2 = map.get(&j).unwrap();
+                    if t1 == t2 {
+                        cu::check!(buckets.merge(k, j), "failed to merge goff {k} and {j}")?;
+                        has_merges = true;
+                    }
+                }
+            }
+        }
+
+        if !has_merges {
+            return Ok(map);
+        }
+
+        let mut new_map = GoffMap::default();
+        for (goff, mut t) in map {
+            use std::collections::btree_map::Entry;
+
+            let k = buckets.primary_fallback(goff);
+            cu::check!(mapper(&mut t, &buckets), "failed to run mapper for {goff} (primary: {k})")?;
+            match new_map.entry(k) {
+                Entry::Occupied(e) => {
+                    cu::ensure!(e.get() == &t, "failed to merge {goff} into {k}: the data are not equal after mapping, please check the mapper implementation");
+                }
+                Entry::Vacant(e) => {
+                    e.insert(t);
+                }
+            }
+        }
+
+        map = new_map;
+    }
+}

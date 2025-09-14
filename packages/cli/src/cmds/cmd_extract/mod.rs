@@ -8,6 +8,7 @@ mod dwarf_parse;
 mod bucket;
 mod name_comparator;
 mod namespace;
+mod deduper;
 
 // mod stage0_clang_parse;
 mod stage0_loader;
