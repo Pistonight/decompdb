@@ -8,4 +8,7 @@ mod clean_typedefs;
 use clean_typedefs::clean_typedefs;
 mod flatten_trees;
 use flatten_trees::flatten_trees;
+mod parse_names;
+use parse_names::parse_names;
 mod run;
+pub use run::run_stage1;

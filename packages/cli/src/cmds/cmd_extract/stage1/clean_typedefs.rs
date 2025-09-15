@@ -7,25 +7,28 @@ use super::super::bucket::GoffBuckets;
 
 /// Eliminate and merge:
 /// - Typedef to a composite type
+/// - Typedef to a primitive type
 /// - Aliases
 /// - Tree::Base
-pub fn clean_typedefs(stage0: &mut Stage0) -> cu::Result<()> {
+pub fn clean_typedefs(stage: &mut Stage0) -> cu::Result<()> {
+    let mut buckets = GoffBuckets::default();
     let mut new_map = GoffMap::default();
     let mut is_tree_cache = GoffMap::default();
-    for goff in stage0.types.keys().copied() {
-        let (goff, resolved) = cu::check!(resolve_alias(goff, &stage0.types, &mut is_tree_cache, 0), "resolve_alias failed for {goff}")?;
-        new_map.insert(goff, resolved);
+    for k1 in stage.types.keys().copied() {
+        let (k2, data) = cu::check!(resolve_alias(k1, &stage.types, &mut is_tree_cache, 0), "resolve_alias failed for {k1}")?;
+        cu::check!(buckets.merge(k1, k2), "clean_typedefs: failed to merge {k1} and {k2}")?;
+        new_map.insert(k2, data);
     }
 
     // it should no longer contain Tree::Base or Alias
     if cfg!(debug_assertions) {
-        for data in new_map.values() {
+        for (k, data) in &new_map {
             match data {
                 Type0::Alias(goff) => {
-                    cu::bail!("unexpected alias after cleaning: {goff}");
+                    cu::bail!("unexpected alias after cleaning: {k} -> {goff}");
                 }
                 Type0::Tree(Tree::Base(goff)) => {
-                    cu::bail!("unexpected tree-base alias after cleaning: {goff}");
+                    cu::bail!("unexpected tree-base alias after cleaning: {k} -> {goff}");
                 }
                 _ => {}
             }
@@ -34,15 +37,15 @@ pub fn clean_typedefs(stage0: &mut Stage0) -> cu::Result<()> {
 
     let deduped = deduper::dedupe(
         new_map,
-        GoffBuckets::default(),
-        &mut stage0.symbols,
+        buckets,
+        &mut stage.symbols,
         |data, buckets| {
             data.map_goff(|k| Ok(buckets.primary_fallback(k)))
         }
     );
     let deduped = cu::check!(deduped, "clean_typedefs: deduped failed")?;
 
-    stage0.types = deduped;
+    stage.types = deduped;
 
     Ok(())
 }
@@ -70,8 +73,8 @@ pub fn resolve_alias<'a>(
                 resolve_alias(*inner, types, is_tree_cache, depth + 1), 
                 "failed to resolve typedef alias {goff} -> {inner}"
             )?;
-            let is_tree = cu::check!(is_tree(*inner, types, is_tree_cache), "is_tree failed for {goff}")?;
-            if is_tree {
+            let should_remove_name = is_tree(*inner, types, is_tree_cache) || is_primitive(*inner, types);
+            if should_remove_name {
                 // change typedef to an alias (eliminate the name) if the inner type is a tree
                 Ok(resolved)
             } else if *inner != resolved.0 {
@@ -90,25 +93,46 @@ pub fn resolve_alias<'a>(
 
 pub fn is_tree(goff: Goff, types: &GoffMap<Type0>, 
     cache: &mut GoffMap<bool>,
-) -> cu::Result<bool> {
+) -> bool {
     if let Some(is_tree) = cache.get(&goff) {
-        return Ok(*is_tree);
+        return *is_tree;
     }
 
     let data = types.get(&goff).unwrap();
     let is_tree = match data {
         Type0::Typedef(_, inner) => {
-            is_tree(*inner, types, cache)?
+            is_tree(*inner, types, cache)
         }
         Type0::Alias(inner) => {
-            is_tree(*inner, types, cache)?
+            is_tree(*inner, types, cache)
         }
         Type0::Tree(Tree::Base(inner)) => {
-            is_tree(*inner, types, cache)?
+            is_tree(*inner, types, cache)
         }
         Type0::Tree(_) => true,
         _ => false
     };
     cache.insert(goff, is_tree);
-    Ok(is_tree)
+    is_tree
+}
+
+pub fn is_primitive(goff: Goff, types: &GoffMap<Type0>) -> bool {
+    if goff.is_prim() {
+        return true;
+    }
+    let data = types.get(&goff).unwrap();
+    let is_prim = match data {
+        Type0::Typedef(_, inner) => {
+            is_primitive(*inner, types)
+        }
+        Type0::Alias(inner) => {
+            is_primitive(*inner, types)
+        }
+        Type0::Tree(Tree::Base(inner)) => {
+            is_primitive(*inner, types)
+        }
+        Type0::Prim(_) => true,
+        _ => false
+    };
+    is_prim
 }

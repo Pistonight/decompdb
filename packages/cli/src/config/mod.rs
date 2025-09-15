@@ -7,8 +7,6 @@ use tyyaml::Prim;
 mod extract;
 pub use extract::*;
 
-use crate::serde_impl::Regex;
-
 /// Load config from a file
 pub fn load(path: impl AsRef<Path>) -> cu::Result<Config> {
     let path = path.as_ref();
@@ -110,4 +108,39 @@ fn resolve_path(base: &Path, path: &mut PathBuf) -> cu::Result<()> {
         *path = base.join(&path).normalize()?;
     }
     Ok(())
+}
+
+/// An entry in compile_commands.json
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct CompileCommand {
+    /// The file name (usually absolute)
+    pub file: String,
+    /// The compile args. Does not include the compiler
+    #[serde(deserialize_with = "deserialize_compile_command_args")]
+    pub command: Vec<String>,
+}
+fn deserialize_compile_command_args<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+        return d.deserialize_str(Visitor);
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = Vec<String>;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "a POSIX compliant shell command")
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                match shell_words::split(v) {
+                    Err(e) => Err(serde::de::Error::custom(format!("invalid shell command: {e}"))),
+                    Ok(mut x) => {
+                        if x.is_empty() {
+                            return Err(serde::de::Error::custom(format!("command must be non-empty")));
+                        }
+
+                        // remove the compiler
+                        x.remove(0);
+                        Ok(x)
+                    }
+                }
+            }
+        }
+
 }

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use cu::pre::*;
@@ -6,7 +6,7 @@ use tyyaml::{Prim, Tree, TreeRepr};
 
 use crate::config::Config;
 
-use super::bucket::MergeQueue;
+// use super::bucket::MergeQueue;
 use super::pre::*;
 
 pub struct TypeStage2 {
@@ -85,6 +85,7 @@ pub struct Stage1 {
     pub name: String,
     pub types: GoffMap<Type1>,
     pub config: Arc<Config>,
+    pub symbols: BTreeMap<String, SymbolInfo>
 }
 
 /// Type definitons in Stage1
@@ -93,7 +94,7 @@ pub struct Stage1 {
 /// - Trees are flattened: A Tree::Base definitely points to a 
 ///   primitive, enum, union or struct.
 /// - Typedefs to composite types are eliminated
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type1 {
     /// Pritimive type
     Prim(Prim),
@@ -138,15 +139,6 @@ impl Type1 {
                 }
             }
             Type1::StructDecl(_) => {}
-            Type1::Tree(tree) => {
-                cu::check!(
-                    tree.for_each_mut(|r| {
-                        *r = f(*r)?;
-                        cu::Ok(())
-                    }),
-                    "failed to map type tree"
-                )?;
-            }
         }
         Ok(())
     }
@@ -227,6 +219,69 @@ impl Type0 {
         Ok(())
     }
 
+    pub fn mark(&self, self_goff: Goff, marked: &mut GoffSet) {
+        match self {
+            Type0::Prim(prim) => {
+                marked.insert(Goff::prim(*prim));
+            }
+            Type0::Typedef(_, goff) => {
+                marked.insert(*goff);
+                marked.insert(self_goff);
+            }
+            Type0::Union(_, data) => {
+                for targ in &data.template_args {
+                    targ.mark(marked);
+                }
+                for member in &data.members {
+                    let _: Result<_, _> = member.ty.for_each(|goff| {
+                        marked.insert(*goff);
+                        Ok(())
+                    });
+                }
+                marked.insert(self_goff);
+            }
+            Type0::Struct(_, data) => {
+                for targ in &data.template_args {
+                    let TemplateArg::Type(tree) = targ else {
+                        continue;
+                    };
+                    let _: Result<_, _> =  tree.for_each(|goff| {
+                        marked.insert(*goff);
+                        Ok(())
+                    });
+                }
+                for (_, ventry) in &data.vtable {
+                    for t in &ventry.function_types {
+  let _: Result<_, _> =                        t.for_each(|goff| {
+                            marked.insert(*goff);
+                            Ok(())
+                        });
+                    }
+                }
+                for member in &data.members {
+                    let _: Result<_, _> =  member.ty.for_each(|goff| {
+                        marked.insert(*goff);
+                        Ok(())
+                    });
+                }
+                marked.insert(self_goff);
+            }
+            Type0::Tree(tree) => {
+  let _: Result<_, _> =                tree.for_each(|goff| {
+                    marked.insert(*goff);
+                    Ok(())
+                });
+            }
+            Type0::Alias(goff) => {
+                marked.insert(*goff);
+            }
+            // decls, and enum defn
+            _ => {
+                marked.insert(self_goff);
+            }
+        }
+    }
+
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -296,15 +351,15 @@ impl Type0Union {
         Ok(())
     }
 
-    pub fn merge_checked(&self, other: &Self, merges: &mut MergeQueue) -> cu::Result<()> {
-        self.check_merge_precondition(other)?;
-        let mut mq = MergeQueue::default();
-        for (a, b) in std::iter::zip(&self.members, &other.members) {
-            cu::check!(a.merge_checked(b, &mut mq), "cannot merge union member")?;
-        }
-        merges.extend(mq)?;
-        Ok(())
-    }
+    // pub fn merge_checked(&self, other: &Self, merges: &mut MergeQueue) -> cu::Result<()> {
+    //     self.check_merge_precondition(other)?;
+    //     let mut mq = MergeQueue::default();
+    //     for (a, b) in std::iter::zip(&self.members, &other.members) {
+    //         cu::check!(a.merge_checked(b, &mut mq), "cannot merge union member")?;
+    //     }
+    //     merges.extend(mq)?;
+    //     Ok(())
+    // }
     pub fn merge_from(&mut self, other: &mut Self) -> cu::Result<()> {
         self.check_merge_precondition(other)?;
         // we don't have any "partial definitions" for unions observed yet
@@ -364,35 +419,35 @@ impl Type0Struct {
         Ok(())
     }
 
-    pub fn merge_checked(&self, other: &Self, merges: &mut MergeQueue) -> cu::Result<()> {
-        self.check_merge_precondition(other)?;
-        let mut mq = MergeQueue::default();
-        // for vtable, we might not have the full vtable at this point yet,
-        // so we can only check if there are any existing conflicts
-        for (i, entry) in &self.vtable {
-            if entry.is_dtor() {
-                if let Some((_, other_entry)) = other.vtable.iter().find(|(_, e)| e.is_dtor()) {
-                    cu::check!(
-                        entry.merge_checked(other_entry, &mut mq),
-                        "cannot merge struct vtable dtor entry"
-                    )?;
-                }
-                continue;
-            }
-            if let Some((_, other_entry)) = other.vtable.iter().find(|(x, _)| x == i) {
-                cu::check!(
-                    entry.merge_checked(other_entry, &mut mq),
-                    "cannot merge struct vtable entry {i}"
-                )?;
-            }
-        }
-
-        for (a, b) in std::iter::zip(&self.members, &other.members) {
-            cu::check!(a.merge_checked(b, &mut mq), "cannot merge struct member")?;
-        }
-        merges.extend(mq)?;
-        Ok(())
-    }
+    // pub fn merge_checked(&self, other: &Self, merges: &mut MergeQueue) -> cu::Result<()> {
+    //     self.check_merge_precondition(other)?;
+    //     let mut mq = MergeQueue::default();
+    //     // for vtable, we might not have the full vtable at this point yet,
+    //     // so we can only check if there are any existing conflicts
+    //     for (i, entry) in &self.vtable {
+    //         if entry.is_dtor() {
+    //             if let Some((_, other_entry)) = other.vtable.iter().find(|(_, e)| e.is_dtor()) {
+    //                 cu::check!(
+    //                     entry.merge_checked(other_entry, &mut mq),
+    //                     "cannot merge struct vtable dtor entry"
+    //                 )?;
+    //             }
+    //             continue;
+    //         }
+    //         if let Some((_, other_entry)) = other.vtable.iter().find(|(x, _)| x == i) {
+    //             cu::check!(
+    //                 entry.merge_checked(other_entry, &mut mq),
+    //                 "cannot merge struct vtable entry {i}"
+    //             )?;
+    //         }
+    //     }
+    //
+    //     for (a, b) in std::iter::zip(&self.members, &other.members) {
+    //         cu::check!(a.merge_checked(b, &mut mq), "cannot merge struct member")?;
+    //     }
+    //     merges.extend(mq)?;
+    //     Ok(())
+    // }
 
     pub fn merge_from(&mut self, other: &mut Self) -> cu::Result<()> {
         self.check_merge_precondition(other)?;
@@ -548,27 +603,27 @@ impl VtableEntry {
         }
         Ok(())
     }
-    pub fn merge_checked(&self, other: &Self, merges: &mut MergeQueue) -> cu::Result<()> {
-        cu::ensure!(
-            self.name == other.name,
-            "vtable function names are not equal: {:?} != {:?}",
-            self.name,
-            other.name
-        );
-        cu::ensure!(
-            self.function_types.len() == other.function_types.len(),
-            "vtable entry subroutine types lengths are not equal"
-        );
-        let mut mq = MergeQueue::default();
-        for (a, b) in std::iter::zip(&self.function_types, &other.function_types) {
-            cu::check!(
-                tree_merge_checked(a, b, &mut mq),
-                "cannot merge vtable entry subroutine arg/ret type"
-            )?;
-        }
-        merges.extend(mq)?;
-        Ok(())
-    }
+    // pub fn merge_checked(&self, other: &Self, merges: &mut MergeQueue) -> cu::Result<()> {
+    //     cu::ensure!(
+    //         self.name == other.name,
+    //         "vtable function names are not equal: {:?} != {:?}",
+    //         self.name,
+    //         other.name
+    //     );
+    //     cu::ensure!(
+    //         self.function_types.len() == other.function_types.len(),
+    //         "vtable entry subroutine types lengths are not equal"
+    //     );
+    //     let mut mq = MergeQueue::default();
+    //     for (a, b) in std::iter::zip(&self.function_types, &other.function_types) {
+    //         cu::check!(
+    //             tree_merge_checked(a, b, &mut mq),
+    //             "cannot merge vtable entry subroutine arg/ret type"
+    //         )?;
+    //     }
+    //     merges.extend(mq)?;
+    //     Ok(())
+    // }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -632,6 +687,10 @@ pub enum TemplateArg<T: TreeRepr> {
     /// Type value. Could be unflattened depending on the stage
     #[display("{}", _0)]
     Type(Tree<T>),
+
+    /// A constant value assigned by compiler (like a function address)
+    #[display("[static]")]
+    StaticConst
 }
 
 impl TemplateArg<Goff> {
@@ -649,6 +708,16 @@ impl TemplateArg<Goff> {
         )?;
         Ok(())
     }
+
+    pub fn mark(&self, marked: &mut GoffSet) {
+        let TemplateArg::Type(tree) = self else {
+            return;
+        };
+        let _: Result<_, _> = tree.for_each(|goff| {
+            marked.insert(*goff);
+            Ok(())
+        });
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -664,9 +733,8 @@ pub struct SymbolInfo {
     /// Empty string could exists for unnamed parameters,
     /// depending on the stage.
     pub param_names: Vec<String>,
-    // TODO: this could be useful if we want to GC types
-    // to those only referenced by symbols
-    // pub referenced_types: BTreeSet<Goff>,
+    /// Function template instantiation
+    pub template_args: Vec<TemplateArg<Goff>>,
 }
 
 impl SymbolInfo {
@@ -677,21 +745,38 @@ impl SymbolInfo {
             ty: Tree::Base(ty),
             // is_func: false, 
             param_names: vec![],
-            // referenced_types: Default::default(),
+            template_args: Default::default(),
         }
     }
     pub fn new_func(
         linkage_name: String, 
-        types: Vec<Goff>,
-        param_names: Vec<String>,
-        // referenced_types: BTreeSet<Goff>
+        types: Vec<Tree<Goff>>,
+        mut param_names: Vec<String>,
+        template_args: Vec<TemplateArg<Goff>>
     ) -> Self {
+        // fill in empty param names
+        let mut changes = vec![];
+        for (i, name) in param_names.iter().enumerate() {
+            if !name.is_empty() {
+                continue;
+            }
+            let mut j = i;
+            let mut new_name = format!("a{j}");
+            while param_names.iter().any(|x| x == &new_name) {
+                j+=1;
+                new_name = format!("a{j}");
+            }
+            changes.push((i, new_name));
+        }
+        for (i, name) in changes {
+            param_names[i] = name;
+        }
         Self { 
             address: 0,
             link_name: linkage_name,
-            ty: Tree::Sub(types.into_iter().map(Tree::Base).collect()),
+            ty: Tree::Sub(types),
             param_names,
-            // referenced_types,
+            template_args,
         }
     }
     /// Run goff conversion on nested type data
@@ -703,66 +788,88 @@ impl SymbolInfo {
             }),
             "failed to map symbol type"
         )?;
+
+        for targ in &mut self.template_args {
+            cu::check!(targ.map_goff(&f), "failed to map symbol template args")?;
+        }
+
         Ok(())
     }
-    // pub fn merge(&mut self, other: &Self) -> cu::Result<()> {
-    //     cu::ensure!(self.is_func == other.is_func, "cannot merge data/func symbol info");
-    //     cu::ensure!(self.link_name == other.link_name, "cannot merge symbol info with different linkage names: {} != {}", self.link_name, other.link_name);
-    //     cu::ensure!(self.ty == other.ty, "cannot merge symbol info with different types");
-    //     cu::ensure!(self.args == other.args, "cannot merge symbol info with different args");
-    //     self.referenced_types.extend(other.referenced_types.clone());
-    //     Ok(())
-    // }
-}
-
-pub fn tree_merge_checked(a: &Tree<Goff>, b: &Tree<Goff>, merges: &mut MergeQueue) -> cu::Result<()> {
-    match (a, b) {
-        (Tree::Base(a), Tree::Base(b)) => {
-            merges.push(*a, *b)?;
+    pub fn mark(&self, marked: &mut GoffSet) {
+        let _: Result<_, _> = self.ty.for_each(|goff| {
+            marked.insert(*goff);
             Ok(())
-        }
-        (Tree::Array(a, a_len), Tree::Array(b, b_len)) => {
-            cu::ensure!(a_len == b_len, "array lengths are not equal: {a_len} != {b_len}");
-            cu::check!(tree_merge_checked(a, b, merges), "cannot merge array element types")
-        }
-        (Tree::Ptr(a), Tree::Ptr(b)) => {
-            cu::check!(tree_merge_checked(a, b, merges), "cannot merge pointer types")
-        }
-        (Tree::Sub(a_args), Tree::Sub(b_args)) => {
-            cu::ensure!(a_args.len() == b_args.len(), "subroutine types lengths are not equal");
-            let mut mq = MergeQueue::default();
-            for (a, b) in std::iter::zip(a_args, b_args) {
-                cu::check!(
-                    tree_merge_checked(a, b, &mut mq),
-                    "cannot merge subroutine arg/ret type"
-                )?;
-            }
-            merges.extend(mq)?;
-            Ok(())
-        }
-        (Tree::Ptmd(a, a_inner), Tree::Ptmd(b, b_inner)) => {
-            cu::check!(
-                tree_merge_checked(a_inner, b_inner, merges),
-                "cannot merge ptmd pointee types"
-            )?;
-            merges.push(*a, *b)?;
-            Ok(())
-        }
-        (Tree::Ptmf(a, a_args), Tree::Ptmf(b, b_args)) => {
-            cu::ensure!(a_args.len() == b_args.len(), "ptmf types lengths are not equal");
-            let mut mq = MergeQueue::default();
-            for (a, b) in std::iter::zip(a_args, b_args) {
-                cu::check!(
-                    tree_merge_checked(a, b, &mut mq),
-                    "cannot merge ptmf subroutine arg/ret type"
-                )?;
-            }
-            merges.extend(mq)?;
-            merges.push(*a, *b)?;
-            Ok(())
-        }
-        (a, b) => {
-            cu::bail!("cannot merge type trees of different shapes: {a:#?}, and {b:#?}");
+        });
+        for targ in &self.template_args {
+            targ.mark(marked);
         }
     }
+    pub fn merge(&mut self, other: &Self) -> cu::Result<()> {
+        cu::ensure!(self.link_name == other.link_name, "cannot merge symbol info with different linkage names: {} != {}", self.link_name, other.link_name);
+        cu::ensure!(self.ty == other.ty, "cannot merge symbol info with different types");
+        cu::ensure!(self.param_names == other.param_names, "cannot merge symbol info with different param_names");
+        // some info does not have template args, in which case we fill it in
+        match (self.template_args.is_empty(), other.template_args.is_empty()) {
+            (_, true) => {},
+            (true, false) => {
+                self.template_args = other.template_args.clone();
+            }
+            (false, false) => {
+                cu::ensure!(self.template_args == other.template_args, "cannot merge symbol info with different template_args");
+            }
+        }
+        Ok(())
+    }
 }
+
+// pub fn tree_merge_checked(a: &Tree<Goff>, b: &Tree<Goff>, merges: &mut MergeQueue) -> cu::Result<()> {
+//     match (a, b) {
+//         (Tree::Base(a), Tree::Base(b)) => {
+//             merges.push(*a, *b)?;
+//             Ok(())
+//         }
+//         (Tree::Array(a, a_len), Tree::Array(b, b_len)) => {
+//             cu::ensure!(a_len == b_len, "array lengths are not equal: {a_len} != {b_len}");
+//             cu::check!(tree_merge_checked(a, b, merges), "cannot merge array element types")
+//         }
+//         (Tree::Ptr(a), Tree::Ptr(b)) => {
+//             cu::check!(tree_merge_checked(a, b, merges), "cannot merge pointer types")
+//         }
+//         (Tree::Sub(a_args), Tree::Sub(b_args)) => {
+//             cu::ensure!(a_args.len() == b_args.len(), "subroutine types lengths are not equal");
+//             let mut mq = MergeQueue::default();
+//             for (a, b) in std::iter::zip(a_args, b_args) {
+//                 cu::check!(
+//                     tree_merge_checked(a, b, &mut mq),
+//                     "cannot merge subroutine arg/ret type"
+//                 )?;
+//             }
+//             merges.extend(mq)?;
+//             Ok(())
+//         }
+//         (Tree::Ptmd(a, a_inner), Tree::Ptmd(b, b_inner)) => {
+//             cu::check!(
+//                 tree_merge_checked(a_inner, b_inner, merges),
+//                 "cannot merge ptmd pointee types"
+//             )?;
+//             merges.push(*a, *b)?;
+//             Ok(())
+//         }
+//         (Tree::Ptmf(a, a_args), Tree::Ptmf(b, b_args)) => {
+//             cu::ensure!(a_args.len() == b_args.len(), "ptmf types lengths are not equal");
+//             let mut mq = MergeQueue::default();
+//             for (a, b) in std::iter::zip(a_args, b_args) {
+//                 cu::check!(
+//                     tree_merge_checked(a, b, &mut mq),
+//                     "cannot merge ptmf subroutine arg/ret type"
+//                 )?;
+//             }
+//             merges.extend(mq)?;
+//             merges.push(*a, *b)?;
+//             Ok(())
+//         }
+//         (a, b) => {
+//             cu::bail!("cannot merge type trees of different shapes: {a:#?}, and {b:#?}");
+//         }
+//     }
+// }

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use cu::pre::*;
 
-use crate::config::Config;
+use crate::config::{CompileCommand, Config};
 use crate::demangler::Demangler;
 use crate::symlist::SymbolList;
 
@@ -29,15 +29,15 @@ pub fn run(config: Config) -> cu::Result<()> {
 async fn run_internal(config: Config) -> cu::Result<()> {
     let config = Arc::new(config);
     cu::fs::make_dir(&config.paths.extract_output)?;
-    // let compile_commands = {
-    //     let cc = cu::fs::read_string(&config.paths.compdb)?;
-    //     let cc_vec = json::parse::<Vec<CompileCommand>>(&cc)?;
-    //     let mut cc_map = BTreeMap::new();
-    //     for c in cc_vec {
-    //         cc_map.insert(c.file.clone(), c);
-    //     }
-    //     cc_map
-    // };
+    let compile_commands = {
+        let cc = cu::fs::read_string(&config.paths.compdb)?;
+        let cc_vec = json::parse::<Vec<CompileCommand>>(&cc)?;
+        let mut cc_map = BTreeMap::new();
+        for c in cc_vec {
+            cc_map.insert(c.file.clone(), c);
+        }
+        cc_map
+    };
 
     let bytes: Arc<[u8]> = cu::fs::read(&config.paths.elf)?.into();
     let dwarf = Dwarf::try_parse(bytes)?;
@@ -67,7 +67,7 @@ async fn run_internal(config: Config) -> cu::Result<()> {
         let bar = cu::progress_bar(units.len(), "stage0: loading types");
         let mut handles = Vec::with_capacity(units.len());
         let pool = cu::co::pool(-1);
-        let mut stage1s = Vec::with_capacity(units.len());
+        let mut output = Vec::with_capacity(units.len());
 
         for unit in units {
             let config = Arc::clone(&config);
@@ -84,30 +84,49 @@ async fn run_internal(config: Config) -> cu::Result<()> {
         let mut count = 0;
         let mut type_count = 0;
         while let Some(result) = set.next().await {
-            let stage1 = result??;
+            let stage = result??;
             count += 1;
-            type_count += stage1.types.len();
-            cu::progress!(&bar, count, "{}", stage1.name);
-            stage1s.push(stage1);
+            type_count += stage.types.len();
+            cu::progress!(&bar, count, "{}", stage.name);
+            output.push(stage);
         }
         cu::progress_done!(&bar, "stage0: loaded {type_count} types");
         drop(bar);
-        stage1s.sort_unstable_by_key(|x| x.offset);
-        stage1s
+        output.sort_unstable_by_key(|x| x.offset);
+        output
     };
 
-    // let stage1 = {
-    //     let bar = cu::progress_bar(stage0.len(), "stage0 -> stage1: parsing types");
-    //     for (i, stage0) in stage0.into_iter().enumerate() {
-    //         let name = stage0.name.clone();
-    //         cu::progress!(&bar, i, "{name}");
-    //         let command = cu::check!(compile_commands.get(&name), "cannot find compile command for {name}")?;
-    //         let stage1 = cu::check!(
-    //             stage0_clang_parse::parse_type(stage0, command).await,
-    //             "failed to parse types for {name}"
-    //         )?;
-    //     }
-    // };
+    let stage1 = {
+        let bar = cu::progress_bar(stage0.len(), "stage0 -> stage1: reducing types");
+        let mut handles = Vec::with_capacity(stage0.len());
+        let pool = cu::co::pool(-1);
+        let mut output = Vec::with_capacity(stage0.len());
+
+        for stage in stage0 {
+            let name = &stage.name;
+            let command = cu::check!(compile_commands.get(name), "cannot find compile command for {name}")?;
+            let command = command.clone();
+            let handle = pool.spawn(async move {
+                super::stage1::run_stage1(stage, &command).await
+            });
+            handles.push(handle);
+        }
+
+        let mut set = cu::co::set(handles);
+        let mut count = 0;
+        let mut type_count = 0;
+        while let Some(result) = set.next().await {
+            let stage = result??;
+            count += 1;
+            type_count += stage.types.len();
+            cu::progress!(&bar, count, "{}", stage.name);
+            output.push(stage);
+        }
+        cu::progress_done!(&bar, "stage1: reduced into {type_count} types");
+        drop(bar);
+        output.sort_unstable_by_key(|x| x.offset);
+        output
+    };
 
     cu::hint!("done");
 

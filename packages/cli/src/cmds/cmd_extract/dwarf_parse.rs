@@ -349,11 +349,20 @@ impl<'x> Die<'x, '_> {
     }
     /// Get a signed integer attribute value
     pub fn int(&self, attr: DwAt) -> cu::Result<i64> {
+        let value = self.int_opt(attr)?;
+        let offset = self.goff();
+        let value = cu::check!(value, "entry is missing {attr} at offset {offset}")?;
+        Ok(value)
+    }
+    /// Get a signed integer attribute value, allowing it to be missing
+    pub fn int_opt(&self, attr: DwAt) -> cu::Result<Option<i64>> {
         let offset = self.goff();
         let value = cu::check!(self.entry.attr_value(attr), "failed to read {attr} at offset {offset}")?;
-        let value = cu::check!(value, "entry is missing {attr} at offset {offset}")?;
+        let Some(value) = value else {
+            return Ok(None);
+        };
         let value = self.unit.attr_signed(offset, attr, value)?;
-        Ok(value)
+        Ok(Some(value))
     }
     /// Get an unsigned integer attribute value
     pub fn uint(&self, attr: DwAt) -> cu::Result<u64> {

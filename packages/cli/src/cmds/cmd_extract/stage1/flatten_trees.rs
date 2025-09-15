@@ -5,17 +5,19 @@ use super::pre::*;
 use super::super::bucket::GoffBuckets;
 use super::super::deduper;
 
-pub fn flatten_trees(stage0: &mut Stage0) -> cu::Result<()> {
+pub fn flatten_trees(stage: &mut Stage0) -> cu::Result<()> {
     let mut changes = GoffMap::default();
-    for goff in stage0.types.keys().copied() {
-        let flattened = cu::check!(flatten_by_goff(goff, &stage0.types, 0), "failed to flatten type {goff}")?;
+    for goff in stage.types.keys().copied() {
+        let flattened = cu::check!(flatten_by_goff(goff, &stage.types, 0), "failed to flatten type {goff}")?;
         if let Some(flattened) = flattened {
             changes.insert(goff, Type0::Tree(flattened));
         }
     }
+    stage.types.extend(changes);
 
     // flatten trees in type data
-    for (goff, data) in &stage0.types {
+    let mut changes = vec![];
+    for (goff, data) in &stage.types {
         match data {
             Type0::Union(name, data) => {
                 let mut copy = data.clone();
@@ -25,7 +27,7 @@ pub fn flatten_trees(stage0: &mut Stage0) -> cu::Result<()> {
                         continue;
                     };
                     let flattened = cu::check!(
-                        flatten_by_tree(tree, &stage0.types, 0), "failed to flatten union template arg for {goff}"
+                        flatten_by_tree(tree, &stage.types, 0), "failed to flatten union template arg for {goff}"
                     )?;
                     if let Some(flattened) = flattened {
                         *tree = flattened;
@@ -34,7 +36,7 @@ pub fn flatten_trees(stage0: &mut Stage0) -> cu::Result<()> {
                 }
                 for member in &mut copy.members {
                     let flattened = cu::check!(
-                        flatten_by_tree(&member.ty, &stage0.types, 0), "failed to flatten union member for {goff}"
+                        flatten_by_tree(&member.ty, &stage.types, 0), "failed to flatten union member for {goff}"
                     )?;
                     if let Some(flattened) = flattened {
                         member.ty = flattened;
@@ -42,7 +44,7 @@ pub fn flatten_trees(stage0: &mut Stage0) -> cu::Result<()> {
                     }
                 }
                 if changed {
-                    changes.insert(*goff, Type0::Union(name.clone(), copy));
+                    changes.push((*goff, Type0::Union(name.clone(), copy)));
                 }
             },
             Type0::Struct(name, data) => {
@@ -53,7 +55,7 @@ pub fn flatten_trees(stage0: &mut Stage0) -> cu::Result<()> {
                         continue;
                     };
                     let flattened = cu::check!(
-                        flatten_by_tree(tree, &stage0.types, 0), "failed to flatten struct template arg for {goff}"
+                        flatten_by_tree(tree, &stage.types, 0), "failed to flatten struct template arg for {goff}"
                     )?;
                     if let Some(flattened) = flattened {
                         *tree = flattened;
@@ -63,7 +65,7 @@ pub fn flatten_trees(stage0: &mut Stage0) -> cu::Result<()> {
                 for (_, ventry) in &mut copy.vtable {
                     for tree in &mut ventry.function_types {
                         let flattened = cu::check!(
-                            flatten_by_tree(tree, &stage0.types, 0), "failed to flatten struct vtable function type for {goff}"
+                            flatten_by_tree(tree, &stage.types, 0), "failed to flatten struct vtable function type for {goff}"
                         )?;
                         if let Some(flattened) = flattened {
                             *tree = flattened;
@@ -73,7 +75,7 @@ pub fn flatten_trees(stage0: &mut Stage0) -> cu::Result<()> {
                 }
                 for member in &mut copy.members {
                     let flattened = cu::check!(
-                        flatten_by_tree(&member.ty, &stage0.types, 0), "failed to flatten struct member for {goff}"
+                        flatten_by_tree(&member.ty, &stage.types, 0), "failed to flatten struct member for {goff}"
                     )?;
                     if let Some(flattened) = flattened {
                         member.ty = flattened;
@@ -81,31 +83,82 @@ pub fn flatten_trees(stage0: &mut Stage0) -> cu::Result<()> {
                     }
                 }
                 if changed {
-                    changes.insert(*goff, Type0::Struct(name.clone(), copy));
+                    changes.push((*goff, Type0::Struct(name.clone(), copy)));
                 }
             }
             _ => {}
         }
     }
+    stage.types.extend(changes);
 
-    stage0.types.extend(changes);
+    // flatten types in symbols
+    let mut changes = vec![];
+    for (name, symbol) in &stage.symbols {
+        let mut copy = symbol.clone();
+        let mut changed = false;
+        let flattened = cu::check!(
+            flatten_by_tree(&symbol.ty, &stage.types, 0),
+            "failed to flatten type for symbol '{name}'"
+        )?;
+        if let Some(flattened) = flattened {
+            copy.ty = flattened;
+            changed = true;
+        }
+        for targ in &mut copy.template_args {
+            let TemplateArg::Type(tree) = targ else  {
+                continue;
+            };
+            let flattened = cu::check!(
+                flatten_by_tree(tree, &stage.types, 0), "failed to flatten symbol template arg for symbol '{name}'"
+            )?;
+            if let Some(flattened) = flattened {
+                *tree = flattened;
+                changed = true;
+            }
+        }
+        if changed {
+            changes.push((name.clone(), copy));
+        }
+    }
+    stage.symbols.extend(changes);
+
+    // GC types to ensure trees are all GC-ed
+    let mut marked = GoffSet::default();
+    for symbol in stage.symbols.values() {
+        symbol.mark(&mut marked);
+    }
+    super::super::garbage_collector::mark_and_sweep(marked, &mut stage.types, Type0::mark);
+    if cfg!(debug_assertions) {
+        for (k, t) in &stage.types {
+            if let Type0::Tree(t) = t {
+                cu::bail!("unexpected tree type not gc'ed: k={k}, type={t:#?}");
+            }
+        }
+    }
+
     let deduped = deduper::dedupe(
-        std::mem::take(&mut stage0.types),
+        std::mem::take(&mut stage.types),
         GoffBuckets::default(),
-        &mut stage0.symbols,
+        &mut stage.symbols,
         |data, buckets| {
             data.map_goff(|k| Ok(buckets.primary_fallback(k)))
         }
     );
     let deduped = cu::check!(deduped, "flatten_trees: deduped failed")?;
-    stage0.types = deduped;
+
+    stage.types = deduped;
     Ok(())
 }
 
 fn flatten_by_goff(goff: Goff, types: &GoffMap<Type0>, depth: usize) -> cu::Result<Option<Tree<Goff>>> {
-    match types.get(&goff).unwrap() {
+    match cu::check!(types.get(&goff), "unexpected unlinked type {goff}")? {
         Type0::Tree(tree) => {
-            flatten_by_tree(tree, types, depth)
+            // we always need to flatten goff to a tree,
+            // so here we always return Some
+            match flatten_by_tree(tree, types, depth)? {
+                Some(x) => Ok(Some(x)),
+                None => Ok(Some(tree.clone()))
+            }
         }
         Type0::Alias(_) => {
             cu::bail!("stage1 flatten_tree step should not contain alias.");

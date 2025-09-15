@@ -1,12 +1,10 @@
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use cu::pre::*;
 use tyyaml::{Prim, Tree};
 
 use crate::config::Config;
-use crate::demangler::Demangler;
 use crate::symlist::SymbolList;
 
 use super::pre::*;
@@ -342,7 +340,7 @@ fn load_union_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu:
     let byte_size = byte_size as u32;
 
     let mut template_args = Vec::new();
-    let mut members = Vec::<Type0Member>::with_capacity(16);
+    let mut members = Vec::<Member>::with_capacity(16);
     entry.for_each_child(|child| {
         let entry = child.entry();
         let offset = entry.goff();
@@ -356,11 +354,11 @@ fn load_union_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu:
                 let type_loff = cu::check!(type_loff, "unexpected void-typed union member at {offset}")?;
                 let type_offset = entry.to_global(type_loff);
                 // if type is duplicated, just ignore it
-                match members.iter_mut().find(|x| x.ty == type_offset) {
-                    None => members.push(Type0Member {
+                match members.iter_mut().find(|x| x.ty == Tree::Base(type_offset)) {
+                    None => members.push(Member {
                         offset: 0,
                         name,
-                        ty: type_offset,
+                        ty: Tree::Base(type_offset),
                         special: None,
                     }),
                     Some(old) => {
@@ -372,10 +370,9 @@ fn load_union_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu:
                 }
             }
             // template args
-            // template args
             DW_TAG_template_type_parameter | DW_TAG_template_value_parameter | DW_TAG_GNU_template_parameter_pack => {
                 cu::check!(
-                    load_template_type_parameter(&entry, &mut template_args),
+                    load_template_parameter(&entry, &mut template_args),
                     "failed to load template parameter for union at {offset}"
                 )?;
             }
@@ -446,7 +443,7 @@ fn load_struct_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu
 
     let mut vtable = Vec::default();
     let mut template_args = Vec::new();
-    let mut members = Vec::<Type0Member>::with_capacity(16);
+    let mut members = Vec::<Member>::with_capacity(16);
 
     let result = entry.for_each_child(|child| {
         let entry = child.entry();
@@ -485,17 +482,17 @@ fn load_struct_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu
                         member_offset == 0,
                         "unexpected vfptr field at non-zero offset, for member at {offset}"
                     );
-                    Type0Member {
+                    Member {
                         offset: 0,
                         name: None,
-                        ty: Goff::prim(ctx.pointer_type),
+                        ty: Tree::Base(Goff::prim(ctx.pointer_type)),
                         special: Some(SpecialMember::Vfptr),
                     }
                 } else {
-                    Type0Member {
+                    Member {
                         offset: member_offset,
                         name: name.map(Arc::from),
-                        ty: type_offset,
+                        ty: Tree::Base(type_offset),
                         special: None,
                     }
                 };
@@ -543,10 +540,10 @@ fn load_struct_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu
                 )?;
                 let type_loff = cu::check!(type_loff, "unexpected void-typed struct base class at {offset}")?;
                 let type_offset = entry.to_global(type_loff);
-                members.push(Type0Member {
+                members.push(Member {
                     offset: member_offset,
                     name: None, // we will assign name to base members in a later step
-                    ty: type_offset,
+                    ty: Tree::Base(type_offset),
                     special: Some(SpecialMember::Base),
                 });
             }
@@ -570,7 +567,7 @@ fn load_struct_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu
             // template args
             DW_TAG_template_type_parameter | DW_TAG_template_value_parameter | DW_TAG_GNU_template_parameter_pack => {
                 cu::check!(
-                    load_template_type_parameter(&entry, &mut template_args),
+                    load_template_parameter(&entry, &mut template_args),
                     "failed to load template parameter for struct at {offset}"
                 )?;
             }
@@ -632,7 +629,7 @@ fn load_struct_type_from_entry(entry: &Die<'_, '_>, ctx: &mut LoadTypeCtx) -> cu
 /// - DW_TAG_template_type_parameter,
 /// - DW_TAG_template_value_parameter
 /// - DW_TAG_GNU_template_parameter_pack
-fn load_template_type_parameter(entry: &Die<'_, '_>, out: &mut Vec<TemplateArg<Goff>>) -> cu::Result<()> {
+fn load_template_parameter(entry: &Die<'_, '_>, out: &mut Vec<TemplateArg<Goff>>) -> cu::Result<()> {
     match entry.tag() {
         DW_TAG_template_type_parameter => {
             let type_loff = cu::check!(
@@ -648,16 +645,20 @@ fn load_template_type_parameter(entry: &Die<'_, '_>, out: &mut Vec<TemplateArg<G
         }
         DW_TAG_template_value_parameter => {
             let value = cu::check!(
-                entry.int(DW_AT_const_value),
+                entry.int_opt(DW_AT_const_value),
                 "failed to get template value paramter at {}",
                 entry.goff()
             )?;
-            out.push(TemplateArg::Const(value));
+            let arg = match value {
+                Some(i) => TemplateArg::Const(i),
+                None => TemplateArg::StaticConst,
+            };
+            out.push(arg);
         }
         DW_TAG_GNU_template_parameter_pack => {
             let result = entry.for_each_child(|child| {
                 let entry = child.entry();
-                load_template_type_parameter(&entry, out)
+                load_template_parameter(&entry, out)
             });
             cu::check!(
                 result,
@@ -776,6 +777,7 @@ fn load_func_symbol_at<'a, 'b>(node: DieNode<'a, 'b>, ctx: &mut LoadSymbolCtx) -
         cu::ensure!(is_inlined, "function at {offset} is not inlined and does not have low_pc");
     }
 
+    let mut types = vec![];
 
     // return type
     let retty = cu::check!(load_func_retty(&entry), "failed to get return type for function at {offset}")?;
@@ -783,38 +785,49 @@ fn load_func_symbol_at<'a, 'b>(node: DieNode<'a, 'b>, ctx: &mut LoadSymbolCtx) -
         None => Goff::prim(Prim::Void),
         Some(l) => entry.to_global(l)
     };
+    types.push(Tree::Base(retty));
     
-    let mut args = vec![];
-    let mut referenced_types = BTreeSet::new();
+    let mut param_names = vec![];
+    let mut template_args = vec![];
     let result = entry.for_each_child(|child| {
         let entry = child.entry();
         let offset = entry.goff();
         match entry.tag() {
+            // template args
+            DW_TAG_template_type_parameter | DW_TAG_template_value_parameter | DW_TAG_GNU_template_parameter_pack => {
+                cu::check!(
+                    load_template_parameter(&entry, &mut template_args),
+                    "failed to load template parameter for function at {offset}"
+                )?;
+            }
             DW_TAG_formal_parameter => {
                 let name = cu::check!(load_func_param_name(&entry), "failed to get function parameter name at {offset}")?;
                 let ty_loff = cu::check!(load_func_param_type(&entry), "failed to get function parameter type at {offset}")?;
                 let ty_loff = cu::check!(ty_loff, "missing parameter type at {offset}")?;
                 let ty = entry.to_global(ty_loff);
-                args.push((name, ty));
+                types.push(Tree::Base(ty));
+                param_names.push(name.unwrap_or_default());
             }
-            DW_TAG_variable => {
-                let ty = cu::check!(entry.loff_opt(DW_AT_type), "failed to get function local variable type at {offset}")?;
-                if let Some(loff) = ty {
-                    let ty = entry.to_global(loff);
-                    referenced_types.insert(ty);
-                }
-            }
+            // DW_TAG_variable => {
+            //     let ty = cu::check!(entry.loff_opt(DW_AT_type), "failed to get function local variable type at {offset}")?;
+            //     if let Some(loff) = ty {
+            //         let ty = entry.to_global(loff);
+            //         referenced_types.insert(ty);
+            //     }
+            // }
             _ => {
                 // ignore others
                 // DW_TAG_inlined_subroutine could potentially be useful
                 // to add comment about inlined functions
+                // DW_TAG_variable could be useful if we want to GC types to avoid
+                // removing types needed for function bodies
             }
         }
         Ok(())
     });
     cu::check!(result, "failed to process function body at {offset}")?;
 
-    let symbol = SymbolInfo::new_func(linkage_name.clone(), retty, args, referenced_types);
+    let symbol = SymbolInfo::new_func(linkage_name.clone(), types, param_names, template_args);
     cu::check!(merge_symbol(&linkage_name, symbol, ctx), "failed to merge function symbol at {offset}")?;
     Ok(node)
 }

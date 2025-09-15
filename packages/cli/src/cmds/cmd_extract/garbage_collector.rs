@@ -2,13 +2,13 @@
 use super::pre::*;
 
 /// Mark and sweep garbage collection algorithm
-pub fn mark_and_sweep<T, F : Fn(&T, &mut GoffSet)>(
+pub fn mark_and_sweep<T, F : Fn(&T, Goff, &mut GoffSet)>(
+    mut marked: GoffSet,
     map: &mut GoffMap<T>,
     marker: F
 ) {
-    let mut marked = GoffSet::default();
-    for t in map.values() {
-        marker(t, &mut marked);
+    for (k, t) in &*map {
+        marker(t, *k, &mut marked);
     }
     map.retain(|k, _| marked.contains(k));
 }
