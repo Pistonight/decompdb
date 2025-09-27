@@ -9,75 +9,22 @@ use crate::config::Config;
 // use super::bucket::MergeQueue;
 use super::pre::*;
 
-pub struct TypeStage2 {
-    pub types: GoffMap<TypeA>,
-}
-
-pub struct TypeStageA {
-    pub offset: usize,
-    pub name: String,
-    pub types: GoffMap<TypeA>,
-}
-
-/// "pieced-together" type info from raw types within a compilation unit
+/// Type definitons in Stage2
+///
+/// - Declarations are merged with the definitions
+/// - Typedef names are merged with the definitions
+/// - All compile units are linked together
+/// - Type layouts are optimized (simplified)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TypeA {
+pub enum Type2 {
     /// Pritimive type
     Prim(Prim),
-    /// Typedef <other> name; Other is global offset in debug info
-    Typedef(String, Goff),
-    /// Enum, could be anonymous
-    Enum(Option<String>, Type1Enum),
-    /// Declaration of an enum
-    EnumDecl(String),
-    /// Union, could be anonymous
-    Union(Option<String>, Type0Union),
-    /// Declaration of union
-    UnionDecl(String),
-    /// Struct or Class, could be anonymous
-    Struct(Option<String>, Type0Struct),
-    /// Declaration of struct or class
-    StructDecl(String),
-    /// Composition of other types. This is guaranteed to be not
-    /// a TyTree::Base on the first level in stage 1
-    Tree(Tree<Goff>),
-}
-impl TypeA {
-    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
-        match self {
-            TypeA::Prim(_) => {}
-            TypeA::Typedef(_, goff) => {
-                *goff = cu::check!(f(*goff), "failed to map typedef goff {goff}")?;
-            }
-            TypeA::Enum(_, _) => {}
-            TypeA::EnumDecl(_) => {}
-            TypeA::Union(_, data) => {
-                for m in &mut data.members {
-                    cu::check!(m.map_goff(&f), "failed to map union members")?;
-                }
-            }
-            TypeA::UnionDecl(_) => {}
-            TypeA::Struct(_, data) => {
-                for m in &mut data.members {
-                    cu::check!(m.map_goff(&f), "failed to map struct members")?;
-                }
-                for (_, e) in &mut data.vtable {
-                    cu::check!(e.map_goff(&f), "failed to map struct vtable entry")?;
-                }
-            }
-            TypeA::StructDecl(_) => {}
-            TypeA::Tree(tree) => {
-                cu::check!(
-                    tree.for_each_mut(|r| {
-                        *r = f(*r)?;
-                        cu::Ok(())
-                    }),
-                    "failed to map type tree"
-                )?;
-            }
-        }
-        Ok(())
-    }
+    /// Enum + typedef names. The name does not include template args. could be anonymous
+    Enum(NamespacedName, Type1Enum, Vec<NamespacedTemplatedName>),
+    /// Union + typedef names. The name does not include template args. could be anonymous
+    Union(NamespacedName, Type0Union, Vec<NamespacedTemplatedName>),
+    /// Struct + typedef names. The name does not include template args. could be anonymous
+    Struct(NamespacedName, Type0Struct, Vec<NamespacedTemplatedName>),
 }
 
 pub struct Stage1 {
@@ -121,16 +68,31 @@ impl Type1 {
     pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
         match self {
             Type1::Prim(_) => {}
-            Type1::Typedef(_, goff) => {
+            Type1::Typedef(name, goff) => {
+                cu::check!(name.map_goff(&f), "failed to map name for typedef")?;
                 *goff = cu::check!(f(*goff), "failed to map typedef goff {goff}")?;
             }
-            Type1::Enum(_, _) => {}
-            Type1::EnumDecl(_) => {}
-            Type1::Union(_, data) => {
+            Type1::Enum(name, _) => {
+                if let Some(name) = name {
+                    cu::check!(name.map_goff(&f), "failed to map name for enum")?;
+                }
+            }
+            Type1::EnumDecl(name) => {
+                cu::check!(name.map_goff(&f), "failed to map name for enum decl")?;
+            }
+            Type1::Union(name, data) => {
+                if let Some(name) = name {
+                    cu::check!(name.map_goff(&f), "failed to map name for union")?;
+                }
                 cu::check!(data.map_goff(&f), "failed to map union")?;
             }
-            Type1::UnionDecl(_) => {}
-            Type1::Struct(_, data) => {
+            Type1::UnionDecl(name) => {
+                cu::check!(name.map_goff(&f), "failed to map name for union decl")?;
+            }
+            Type1::Struct(name, data) => {
+                if let Some(name) = name {
+                    cu::check!(name.map_goff(&f), "failed to map name for struct")?;
+                }
                 for m in &mut data.members {
                     cu::check!(m.map_goff(&f), "failed to map struct members")?;
                 }
@@ -138,7 +100,9 @@ impl Type1 {
                     cu::check!(e.map_goff(&f), "failed to map struct vtable entry")?;
                 }
             }
-            Type1::StructDecl(_) => {}
+            Type1::StructDecl(name) => {
+                cu::check!(name.map_goff(&f), "failed to map name for struct decl")?;
+            }
         }
         Ok(())
     }
@@ -190,22 +154,42 @@ impl Type0 {
     pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> { 
         match self {
             Type0::Prim(_) => {}
-            Type0::Typedef(_, inner) => {
+            Type0::Typedef(name, inner) => {
+                cu::check!(name.map_goff(&f), "failed to map name for typedef")?;
                 *inner = cu::check!(f(*inner), "failed to map typedef -> {inner}")?;
             }
             Type0::Alias(inner) => {
                 *inner = cu::check!(f(*inner), "failed to map alias -> {inner}")?;
             }
-            Type0::Enum(_, _) => { }
-            Type0::EnumDecl(_, _) => {}
-            Type0::Union(_, data) => {
+            Type0::Enum(name, _) => { 
+                if let Some(name) = name {
+                    cu::check!(name.map_goff(f), "failed to map type in enum name")?;
+                }
+            }
+            Type0::EnumDecl(ns, name) => {
+                cu::check!(ns.map_goff(&f), "failed to map namespace for enum decl")?;
+                cu::check!(name.map_goff(&f), "failed to map name for enum decl")?;
+            }
+            Type0::Union(name, data) => {
+                if let Some(name) = name {
+                    cu::check!(name.map_goff(&f), "failed to map type in union name")?;
+                }
                 cu::check!(data.map_goff(&f), "failed to map union")?;
             }
-            Type0::UnionDecl(_, _) => {}
-            Type0::Struct(_, data) => {
+            Type0::UnionDecl(ns, name) => {
+                cu::check!(ns.map_goff(&f), "failed to map namespace for union decl")?;
+                cu::check!(name.map_goff(&f), "failed to map name for union decl")?;
+            }
+            Type0::Struct(name, data) => {
+                if let Some(name) = name {
+                    cu::check!(name.map_goff(&f), "failed to map type in struct name")?;
+                }
                 cu::check!(data.map_goff(&f), "failed to map struct")?;
             }
-            Type0::StructDecl(_, _) => {}
+            Type0::StructDecl(ns, name) => {
+                cu::check!(ns.map_goff(&f), "failed to map namespace for struct decl")?;
+                cu::check!(name.map_goff(&f), "failed to map name for struct decl")?;
+            }
             Type0::Tree(tree) => {
                 cu::check!(
                     tree.for_each_mut(|r| {
@@ -638,24 +622,9 @@ pub struct NamespacedTemplatedName {
     /// The untemplated base name (with namespace)
     pub base: NamespacedName,
     /// The template types
-    pub templates: Vec<TemplateArg<NamespacedTemplatedArg>>,
+    pub templates: Vec<TemplateArg<NamespacedTemplatedName>>,
 }
 impl NamespacedTemplatedName {
-    pub fn new(base: &NamespacedName) -> Self {
-        Self {
-            base: base.clone(),
-            templates: vec![],
-        }
-    }
-}
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct NamespacedTemplatedArg {
-    /// The untemplated base name (with namespace)
-    pub base: NamespacedName,
-    /// The template types
-    pub templates: Vec<TemplateArg<NamespacedTemplatedArg>>,
-}
-impl NamespacedTemplatedArg {
     pub fn new(base: NamespacedName) -> Self {
         Self {
             base,
@@ -665,8 +634,16 @@ impl NamespacedTemplatedArg {
     pub fn with_templates(base: NamespacedName, templates: Vec<TemplateArg<Self>>) -> Self {
         Self { base, templates }
     }
+    /// Run goff conversion on nested type data
+    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> { 
+        self.base.map_goff(&f)?;
+        for targ in &mut self.templates {
+            targ.map_goff(&f)?;
+        }
+        Ok(())
+    }
 }
-impl TreeRepr for NamespacedTemplatedArg {
+impl TreeRepr for NamespacedTemplatedName {
     fn serialize_spec(&self) -> cu::Result<String> {
         Ok(json::stringify(self)?)
     }
@@ -717,6 +694,22 @@ impl TemplateArg<Goff> {
             marked.insert(*goff);
             Ok(())
         });
+    }
+}
+
+impl TemplateArg<NamespacedTemplatedName> {
+    /// Run goff conversion on nested type data
+    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> { 
+        let Self::Type(tree) = self else {
+            return Ok(());
+        };
+        cu::check!(
+            tree.for_each_mut(|r| {
+                r.map_goff(&f)
+            }),
+            "failed to map template arg name"
+        )?;
+        Ok(())
     }
 }
 

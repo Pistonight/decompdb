@@ -122,6 +122,8 @@ pub fn flatten_trees(stage: &mut Stage0) -> cu::Result<()> {
     }
     stage.symbols.extend(changes);
 
+    // TODO: flatten types in templates
+
     // GC types to ensure trees are all GC-ed
     let mut marked = GoffSet::default();
     for symbol in stage.symbols.values() {

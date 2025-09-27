@@ -191,6 +191,10 @@ impl NamespacedName {
         s.push_str(&self.1);
         Ok(s)
     }
+
+    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
+        cu::check!(self.0.map_goff(&f), "failed to map namespaced name")
+    }
 }
 
 #[derive(Default, Clone, PartialEq, Eq, Hash, DebugCustom, Serialize, Deserialize)]
@@ -233,18 +237,11 @@ impl Namespace {
         }
         Ok(s)
     }
-}
-
-#[derive(Default, Clone, PartialEq, Eq, Hash, DebugCustom)]
-pub struct NamespaceLiteral(Vec<ArcStr>);
-impl NamespaceLiteral {
-    pub fn new(name: &str) -> Self {
-        Self(vec![name.into()])
-    }
-    pub fn parse(name: &str) -> cu::Result<Self> {
-        let parts: Vec<ArcStr> = name.split("::").map(|x| x.trim().into()).collect();
-        cu::ensure!(!parts.is_empty(), "namespaced name must be non-empty");
-        Ok(Self(parts))
+    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
+        for seg in &mut self.0 {
+            seg.map_goff(&f)?;
+        }
+        Ok(())
     }
 }
 
@@ -287,6 +284,18 @@ impl NameSeg {
             (NameSeg::Anonymous, NameSeg::Anonymous) => true,
             _ => false,
         }
+    }
+    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
+        match self {
+            Self::Type(goff, _) => {
+                *goff = cu::check!(f(*goff), "failed to map type in namespace")?;
+            }
+            Self::Subprogram(goff) => {
+                *goff = cu::check!(f(*goff), "failed to map subprogram in namespace")?;
+            }
+            _ => {}
+        }
+        Ok(())
     }
 }
 
@@ -342,12 +351,6 @@ mod __detail {
     //     fn deserialize_spec(spec: &str) -> cu::Result<Self> { Ok(json::parse(spec)?) }
     // }
     impl std::fmt::Display for Namespace { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut iter = self.0.iter();
-        let Some(first) = iter.next() else { return Ok(()); };
-        write!(f, "{first}")?; for n in iter { write!(f, "::{n}")?; }
-        Ok(())
-    } }
-    impl std::fmt::Display for NamespaceLiteral { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut iter = self.0.iter();
         let Some(first) = iter.next() else { return Ok(()); };
         write!(f, "{first}")?; for n in iter { write!(f, "::{n}")?; }

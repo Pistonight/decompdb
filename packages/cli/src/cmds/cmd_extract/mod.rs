@@ -23,6 +23,6 @@ mod stage1;
 
 mod pre {
     pub use super::dwarf_parse::*;
-    pub use super::namespace::{NameSeg, Namespace, NamespaceLiteral, NamespaceMaps, NamespacedName};
+    pub use super::namespace::{NameSeg, Namespace, NamespaceMaps, NamespacedName};
     pub use gimli::constants::*;
 }

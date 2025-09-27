@@ -58,7 +58,7 @@ pub async fn parse_names(stage: &Stage0, command: &CompileCommand) -> cu::Result
         };
         // no need to process untemplated
         if !name.basename().contains('<') {
-            final_names.insert(*k, NamespacedTemplatedName::new(name));
+            final_names.insert(*k, NamespacedTemplatedName::new(name.clone()));
             continue;
         }
         let mut name_source = name.to_cpp_typedef_source()?;
@@ -426,7 +426,7 @@ fn parse_ast(node: &Node<Ast>, namespace: &Namespace, nsmaps: &NamespaceMaps) ->
 fn parse_template_spec_ast(
     node: &Node<Ast>,
     ns: &NamespaceMaps,
-) -> cu::Result<Vec<TemplateArg<NamespacedTemplatedArg>>> {
+) -> cu::Result<Vec<TemplateArg<NamespacedTemplatedName>>> {
     let mut template_args = Vec::new();
     // iterate through the templates
     for n in &node.inner {
@@ -439,7 +439,7 @@ fn parse_template_spec_ast(
 
     Ok(template_args)
 }
-fn parse_template_arg_ast(node: &Node<Ast>, ns: &NamespaceMaps) -> cu::Result<TemplateArg<NamespacedTemplatedArg>> {
+fn parse_template_arg_ast(node: &Node<Ast>, ns: &NamespaceMaps) -> cu::Result<TemplateArg<NamespacedTemplatedName>> {
     parse_template_arg_ast_recur(node, ns, "", None)
 }
 
@@ -448,7 +448,7 @@ fn parse_template_arg_ast_recur(
     ns: &NamespaceMaps,
     qualifier: &str,
     elaborated_qual_type: Option<&str>,
-) -> cu::Result<TemplateArg<NamespacedTemplatedArg>> {
+) -> cu::Result<TemplateArg<NamespacedTemplatedName>> {
     match &node.kind {
         Ast::ConstantExpr { value } => match value.as_str() {
             "true" => Ok(TemplateArg::Const(1)),
@@ -484,7 +484,7 @@ fn parse_template_arg_ast_recur(
                     );
                 }
             };
-            Ok(TemplateArg::Type(Tree::Base(NamespacedTemplatedArg::new(
+            Ok(TemplateArg::Type(Tree::Base(NamespacedTemplatedName::new(
                 NamespacedName::unnamespaced(prim_name),
             ))))
         }
@@ -516,7 +516,7 @@ fn parse_template_arg_ast_recur(
                 to_namespaced_name(ns, template_name),
                 "failed to convert template name to namespaced name"
             )?;
-            Ok(TemplateArg::Type(Tree::Base(NamespacedTemplatedArg::with_templates(
+            Ok(TemplateArg::Type(Tree::Base(NamespacedTemplatedName::with_templates(
                 name,
                 template_args,
             ))))
@@ -527,7 +527,7 @@ fn parse_template_arg_ast_recur(
                 to_namespaced_name_with_fallback(ns, &ty.qual_type, elaborated_qual_type),
                 "failed to convert record qualified name to namespaced name"
             )?;
-            Ok(TemplateArg::Type(Tree::Base(NamespacedTemplatedArg::new(name))))
+            Ok(TemplateArg::Type(Tree::Base(NamespacedTemplatedName::new(name))))
         }
         Ast::EnumType { ty } => {
             cu::ensure!(node.inner.is_empty(), "EnumType node should have no inner nodes");
@@ -535,7 +535,7 @@ fn parse_template_arg_ast_recur(
                 to_namespaced_name_with_fallback(ns, &ty.qual_type, elaborated_qual_type),
                 "failed to convert enum qualified name to namespaced name"
             )?;
-            Ok(TemplateArg::Type(Tree::Base(NamespacedTemplatedArg::new(name))))
+            Ok(TemplateArg::Type(Tree::Base(NamespacedTemplatedName::new(name))))
         }
         // *, &, &&
         Ast::PointerType | Ast::LValueReferenceType | Ast::RValueReferenceType => {
@@ -556,7 +556,7 @@ fn parse_template_arg_ast_recur(
                 to_namespaced_name(ns, &ty.qual_type),
                 "failed to convert typedef qualified name to namespaced name"
             )?;
-            Ok(TemplateArg::Type(Tree::Base(NamespacedTemplatedArg::new(name))))
+            Ok(TemplateArg::Type(Tree::Base(NamespacedTemplatedName::new(name))))
         }
         Ast::QualType => {
             // qualifier (const, volatile, restrict...)
@@ -625,7 +625,7 @@ fn parse_template_arg_ast_recur(
 fn parse_template_arg_ast_recur_paren_type(
     node: &Node<Ast>,
     ns: &NamespaceMaps,
-) -> cu::Result<TemplateArg<NamespacedTemplatedArg>> {
+) -> cu::Result<TemplateArg<NamespacedTemplatedName>> {
     match &node.kind {
         Ast::FunctionProtoType => parse_template_arg_ast_recur(node, ns, "", None),
         _ => {
