@@ -192,8 +192,8 @@ impl NamespacedName {
         Ok(s)
     }
 
-    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
-        cu::check!(self.0.map_goff(&f), "failed to map namespaced name")
+    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> {
+        cu::check!(self.0.map_goff(f), "failed to map namespaced name")
     }
 }
 
@@ -237,9 +237,9 @@ impl Namespace {
         }
         Ok(s)
     }
-    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
+    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> {
         for seg in &mut self.0 {
-            seg.map_goff(&f)?;
+            seg.map_goff(f)?;
         }
         Ok(())
     }
@@ -285,7 +285,7 @@ impl NameSeg {
             _ => false,
         }
     }
-    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
+    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> {
         match self {
             Self::Type(goff, _) => {
                 *goff = cu::check!(f(*goff), "failed to map type in namespace")?;

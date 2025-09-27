@@ -684,3 +684,5 @@ impl TreeRepr for Goff {
         Ok(Self(cu::parse::<usize>(spec)?))
     }
 }
+
+pub type GoffMapFn<'a> = Box<dyn Fn(Goff) -> cu::Result<Goff> + 'a>;

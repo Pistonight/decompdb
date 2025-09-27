@@ -66,6 +66,7 @@ pub enum Type1 {
 }
 impl Type1 {
     pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
+        let f: GoffMapFn = Box::new(f);
         match self {
             Type1::Prim(_) => {}
             Type1::Typedef(name, goff) => {
@@ -152,6 +153,7 @@ pub enum Type0 {
 impl Type0 {
     /// Run goff conversion on nested type data
     pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> { 
+        let f: GoffMapFn = Box::new(f);
         match self {
             Type0::Prim(_) => {}
             Type0::Typedef(name, inner) => {
@@ -163,7 +165,7 @@ impl Type0 {
             }
             Type0::Enum(name, _) => { 
                 if let Some(name) = name {
-                    cu::check!(name.map_goff(f), "failed to map type in enum name")?;
+                    cu::check!(name.map_goff(&f), "failed to map type in enum name")?;
                 }
             }
             Type0::EnumDecl(ns, name) => {
@@ -325,12 +327,12 @@ pub struct Type0Union {
 }
 
 impl Type0Union {
-    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
+    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> {
         for targ in &mut self.template_args {
-            cu::check!(targ.map_goff(&f), "failed to map union template args")?;
+            cu::check!(targ.map_goff(f), "failed to map union template args")?;
         }
         for member in &mut self.members {
-            cu::check!(member.map_goff(&f), "failed to map union members")?;
+            cu::check!(member.map_goff(f), "failed to map union members")?;
         }
         Ok(())
     }
@@ -390,15 +392,15 @@ pub struct Type0Struct {
 
 impl Type0Struct {
     /// Run goff conversion on nested type data
-    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> { 
+    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> { 
         for targ in &mut self.template_args {
-            cu::check!(targ.map_goff(&f), "failed to map struct template args")?;
+            cu::check!(targ.map_goff(f), "failed to map struct template args")?;
         }
         for (_, ventry) in &mut self.vtable {
-            cu::check!(ventry.map_goff(&f), "failed to map struct vtable entries")?;
+            cu::check!(ventry.map_goff(f), "failed to map struct vtable entries")?;
         }
         for member in &mut self.members {
-            cu::check!(member.map_goff(&f), "failed to map struct members")?;
+            cu::check!(member.map_goff(f), "failed to map struct members")?;
         }
         Ok(())
     }
@@ -526,7 +528,7 @@ impl Member {
     }
 
     /// Run goff conversion on nested type data
-    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> { 
+    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> { 
         cu::check!(
             self.ty.for_each_mut(|r| {
                 *r = f(*r)?;
@@ -635,8 +637,8 @@ impl NamespacedTemplatedName {
         Self { base, templates }
     }
     /// Run goff conversion on nested type data
-    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> { 
-        self.base.map_goff(&f)?;
+    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> { 
+        self.base.map_goff(f)?;
         for targ in &mut self.templates {
             targ.map_goff(&f)?;
         }
@@ -672,7 +674,7 @@ pub enum TemplateArg<T: TreeRepr> {
 
 impl TemplateArg<Goff> {
     /// Run goff conversion on nested type data
-    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> { 
+    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> { 
         let Self::Type(tree) = self else {
             return Ok(());
         };
@@ -699,13 +701,13 @@ impl TemplateArg<Goff> {
 
 impl TemplateArg<NamespacedTemplatedName> {
     /// Run goff conversion on nested type data
-    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> { 
+    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> { 
         let Self::Type(tree) = self else {
             return Ok(());
         };
         cu::check!(
             tree.for_each_mut(|r| {
-                r.map_goff(&f)
+                r.map_goff(f)
             }),
             "failed to map template arg name"
         )?;
@@ -773,7 +775,7 @@ impl SymbolInfo {
         }
     }
     /// Run goff conversion on nested type data
-    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> { 
+    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> { 
         cu::check!(
             self.ty.for_each_mut(|r| {
                 *r = f(*r)?;

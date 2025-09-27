@@ -73,10 +73,13 @@ F
             continue;
         }
 
+        let f:GoffMapFn = Box::new(
+            |k| Ok(buckets.primary_fallback(k))
+        );
         for symbol in symbols.values_mut() {
-            cu::check!(symbol.map_goff(|k| Ok(buckets.primary_fallback(k))), "symbol mapping failed when deduping")?;
+            cu::check!(symbol.map_goff(&f), "symbol mapping failed when deduping")?;
         }
 
-        return Ok(map);
+            return Ok(map);
     }
 }
