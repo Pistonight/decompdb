@@ -10,9 +10,7 @@ use crate::symlist::SymbolList;
 
 use super::namespace;
 use super::pre::*;
-// use super::stage0_clang_parse::{self, CompileCommand};
 use super::stage0_loader;
-// use super::type0_compiler;
 
 /// Extract database artifacts from DWARF info from an ELF file
 #[derive(Debug, clap::Parser, AsRef)]
@@ -39,7 +37,6 @@ async fn run_internal(config: Config) -> cu::Result<()> {
             .stdio_null()
             .co_spawn().await?;
         child.co_wait_nz().await?;
-
     }
 
     cu::fs::make_dir(&config.paths.extract_output)?;

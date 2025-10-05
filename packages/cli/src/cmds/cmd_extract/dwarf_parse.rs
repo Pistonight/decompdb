@@ -19,7 +19,7 @@ pub type Tag = gimli::DwTag;
 /// Holder of Dwarf info, backed by a shared ELF buffer
 pub struct Dwarf {
     dwarf: gimli::Dwarf<In<'static>>,
-    buf: ArcBuf,
+    _buf: ArcBuf,
 }
 
 impl Dwarf {
@@ -54,7 +54,7 @@ impl Dwarf {
         .context("failed to load DWARF from ELF")?;
         dwarf.file_type = DwarfFileType::Main;
 
-        Ok(Arc::new(Self { dwarf, buf: raw_buf }))
+        Ok(Arc::new(Self { dwarf, _buf: raw_buf }))
     }
 
     pub fn iter_units(self_: &Arc<Self>) -> UnitIter {
@@ -222,6 +222,7 @@ pub struct DieNode<'x, 't> {
 }
 
 impl<'x> DieNode<'x, '_> {
+    #[allow(unused)]
     pub fn unit(&self) -> &'x Unit {
         self.unit
     }
@@ -278,12 +279,6 @@ impl<'x> Die<'x, '_> {
     pub fn tag(&self) -> Tag {
         self.entry.tag()
     }
-
-    /// Get the name of the entry
-    pub fn name_owned(&self) -> cu::Result<String> {
-        Ok(self.name()?.to_string())
-    }
-
     /// Get the name of the entry
     pub fn name(&self) -> cu::Result<&str> {
         let value = self.name_opt()?;
@@ -295,25 +290,20 @@ impl<'x> Die<'x, '_> {
         )?;
         Ok(value)
     }
-    /// Get the name of the entry before the first `<`. This can only be used
-    /// for types, and not function names, because of `operator<=`
-    pub fn untemplated_name_owned(&self) -> cu::Result<String> {
-        Ok(self.untemplated_name()?.to_string())
-    }
 
-    /// Get the name of the entry before the first `<`. This can only be used
-    /// for types, and not function names, because of `operator<=`
-    pub fn untemplated_name(&self) -> cu::Result<&str> {
-        let value = self.untemplated_name_opt()?;
-        let offset = self.goff();
-        let value = cu::check!(
-            value,
-            "DW_AT_name is missing for entry at offset {offset} in {}",
-            self.unit
-        )?;
-        Ok(value)
-    }
-
+    // /// Get the name of the entry before the first `<`. This can only be used
+    // /// for types, and not function names, because of `operator<=`
+    // pub fn untemplated_name(&self) -> cu::Result<&str> {
+    //     let value = self.untemplated_name_opt()?;
+    //     let offset = self.goff();
+    //     let value = cu::check!(
+    //         value,
+    //         "DW_AT_name is missing for entry at offset {offset} in {}",
+    //         self.unit
+    //     )?;
+    //     Ok(value)
+    // }
+    
     /// Get the name of the entry before the first `<`. This can only be used
     /// for types, and not function names, because of `operator<=`
     pub fn untemplated_name_opt(&self) -> cu::Result<Option<&str>> {

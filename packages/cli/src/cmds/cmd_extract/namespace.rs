@@ -122,11 +122,11 @@ fn load_namespace_recur(node: DieNode<'_, '_>, ctx: &mut LoadNamespaceCtx) -> cu
     Ok(())
 }
 impl Die<'_, '_> {
-    /// Get the name of the entry with namespace prefix, without templated args
-    pub fn untemplated_qual_name(&self, namespaces: &NamespaceMaps) -> cu::Result<NamespacedName> {
-        let name = self.untemplated_name()?;
-        Self::make_qual_name(namespaces, self.goff(), name)
-    }
+    // /// Get the name of the entry with namespace prefix, without templated args
+    // pub fn untemplated_qual_name(&self, namespaces: &NamespaceMaps) -> cu::Result<NamespacedName> {
+    //     let name = self.untemplated_name()?;
+    //     Self::make_qual_name(namespaces, self.goff(), name)
+    // }
     /// Get the name of the entry with namespace prefix, without templated args
     pub fn untemplated_qual_name_opt(&self, nsmaps: &NamespaceMaps) -> cu::Result<Option<NamespacedName>> {
         let Some(name) = self.untemplated_name_opt()? else {
@@ -140,13 +140,13 @@ impl Die<'_, '_> {
         Self::make_qual_name(nsmaps, self.goff(), name)
     }
 
-    /// Get the name of the entry with namespace prefix, optional
-    pub fn qual_name_opt(&self, nsmaps: &NamespaceMaps) -> cu::Result<Option<NamespacedName>> {
-        let Some(name) = self.name_opt()? else {
-            return Ok(None);
-        };
-        Self::make_qual_name(nsmaps, self.goff(), name).map(Some)
-    }
+    // /// Get the name of the entry with namespace prefix, optional
+    // pub fn qual_name_opt(&self, nsmaps: &NamespaceMaps) -> cu::Result<Option<NamespacedName>> {
+    //     let Some(name) = self.name_opt()? else {
+    //         return Ok(None);
+    //     };
+    //     Self::make_qual_name(nsmaps, self.goff(), name).map(Some)
+    // }
 
     fn make_qual_name(nsmaps: &NamespaceMaps, offset: Goff, name: &str) -> cu::Result<NamespacedName> {
         let namespace = cu::check!(
