@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use cu::pre::*;
@@ -28,6 +29,19 @@ pub fn run(config: Config) -> cu::Result<()> {
 
 async fn run_internal(config: Config) -> cu::Result<()> {
     let config = Arc::new(config);
+
+    let build_bin = cu::check!(config.extract.build_command.first(), "missing extract.build-command in config")?;
+    {
+        let (child, _, _) = Path::new(build_bin).command()
+        .args(config.extract.build_command.iter().skip(1))
+            .current_dir(&config.paths.build_dir)
+            .stderr(cu::pio::spinner("build project"))
+            .stdio_null()
+            .co_spawn().await?;
+        child.co_wait_nz().await?;
+
+    }
+
     cu::fs::make_dir(&config.paths.extract_output)?;
     let compile_commands = {
         let cc = cu::fs::read_string(&config.paths.compdb)?;

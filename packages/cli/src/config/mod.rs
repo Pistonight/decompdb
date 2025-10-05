@@ -15,6 +15,7 @@ pub fn load(path: impl AsRef<Path>) -> cu::Result<Config> {
 
     let base = path.parent_abs()?;
     let base_rel = base.try_to_rel();
+    resolve_path(&base_rel, &mut config.paths.build_dir)?;
     resolve_path(&base_rel, &mut config.paths.elf)?;
     resolve_path(&base_rel, &mut config.paths.extract_output)?;
     resolve_path(&base_rel, &mut config.paths.compdb)?;
@@ -62,6 +63,8 @@ pub struct Config {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct CfgPaths {
+    /// Path to the directory to invoke the build command
+    pub build_dir: PathBuf,
     /// Path to the ELF file for extract.
     pub elf: PathBuf,
     /// Path to the output directory for the extract command.

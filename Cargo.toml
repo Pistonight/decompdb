@@ -7,7 +7,7 @@ resolver = "2"
 
 [workspace.dependencies.cu]
 package = "pistonite-cu"
-version = "0.5.2"
+version = "0.5.3"
 # path = "../cu/packages/copper"
 
 [workspace.dependencies]

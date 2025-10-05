@@ -30,7 +30,8 @@ pub async fn parse_names(stage: &Stage0, command: &CompileCommand) -> cu::Result
     );
 
     let mut final_names = GoffMap::default();
-    let mut requests = GoffMap::default();
+    let mut requests = Vec::default();
+    let mut tokens = BTreeSet::default();
     // put the command into the output cpp file for debugging
     let args = shell_words::join(&command.args);
     let mut source = format!(
@@ -63,55 +64,106 @@ pub async fn parse_names(stage: &Stage0, command: &CompileCommand) -> cu::Result
         }
         let mut name_source = name.to_cpp_typedef_source()?;
         clean_up_name_cpp_source(&mut name_source);
+        let token = make_parse_ident(&name_source);
         if let Some(ns) = namespace {
             let ns_source = ns.to_cpp_typedef_source()?;
-            // no need to clean, since we already processed anonymous
-            // as part of the DWARF tree
+            // no need to clean ns_source, since we already processed anonymous as part of the DWARF tree
             write!(source, "\nnamespace {ns_source}{{")?;
-            write!(source, "\ntypedef\n{name_source}\n{PARSE_TYPE_TOKEN}_{k};")?;
+            write!(source, "\ntypedef\n{name_source}\n{token};")?;
             write!(source, "\n}}")?;
         } else {
-            write!(source, "\ntypedef\n{name_source}\n{PARSE_TYPE_TOKEN}_{k};")?;
+            write!(source, "\ntypedef\n{name_source}\n{token};")?;
         }
         let request = ParseRequest {
             goff: *k,
-            source: name_source,
+            token: token.clone(),
+            // source: name_source,
             namespace: name.namespace(),
         };
-        requests.insert(*k, request);
+        requests.push(request);
+        tokens.insert(token);
     }
 
     if !requests.is_empty() {
-        let parsed_results = match command.try_read_existing_output(&source, &requests) {
+        let ast_nodes = match command.try_read_cached_ast(&source, &tokens) {
             Some(x) => x,
-            None => cu::check!(
-                command.invoke(&source, &requests, &stage.ns).await,
-                "failed to invoke type parse command for: {}",
-                stage.name
-            )?,
+            None => {
+                cu::check!(command.invoke(&source, tokens).await, "failed to invoke AST parse command for: {}", stage.name)?
+            }
         };
-
-        let result_keys: BTreeSet<(Goff, &str)> = parsed_results.iter().map(|(k, r)| (*k, r.source.as_str())).collect();
-        let request_keys: BTreeSet<(Goff, &str)> = requests.iter().map(|(k, r)| (*k, r.source.as_str())).collect();
-        cu::ensure!(result_keys == request_keys, "did not resolve all types");
-
-        for (k, result) in parsed_results {
-            final_names.insert(k, result.parsed);
-        }
+        command.parse_ast_nodes(&requests, &ast_nodes, &stage.ns, &mut final_names)?;
+        //
+        // let result_keys: BTreeSet<(Goff, &str)> = parsed_results.iter().map(|(k, r)| (*k, r.source.as_str())).collect();
+        // let request_keys: BTreeSet<(Goff, &str)> = requests.iter().map(|(k, r)| (*k, r.source.as_str())).collect();
+        // cu::ensure!(result_keys == request_keys, "did not resolve all types");
+        //
+        // for (k, result) in parsed_results {
+        //     final_names.insert(k, result.parsed);
+        // }
     }
 
     Ok(final_names)
 }
 
-const PARSE_TYPE_TOKEN: &str = "____stage0_clang_type_parse";
+// const PARSE_TYPE_TOKEN: &str = "____stage0_clang_type_parse";
 
 
 fn clean_up_name_cpp_source(name: &mut String) {
     *name = name.replace("::(anonymous namespace)::", "::");
 }
 
+/// Create a unique identifier for the type name for use in parsing
+fn make_parse_ident(input: &str) -> String {
+    let mut out = String::from("____stage0_parse_");
+    for seg in input.split("::") {
+        clean_segment(seg, &mut out);
+    }
+    out
+}
+
+fn clean_segment(seg: &str, out: &mut String) {
+    let len = seg.len();
+    for c in seg.chars() {
+        match c {
+            '$' => out.push_str("$$"),
+            '<' => out.push_str("$lt"),
+            '>' => out.push_str("$gt"),
+            '=' => out.push_str("$eq"),
+            '+' => out.push_str("$add"),
+            '-' => out.push_str("$sub"),
+            '*' => out.push_str("$mul"),
+            '/' => out.push_str("$div"),
+            '(' => out.push_str("$l1"),
+            ' ' => out.push_str("$sp"),
+            ')' => out.push_str("$r1"),
+            '&' => out.push_str("$ap"),
+            '^' => out.push_str("$ca"),
+            '%' => out.push_str("$per"),
+            '[' => out.push_str("$l2"),
+            ']' => out.push_str("$r2"),
+            '{' => out.push_str("$l3"),
+            '}' => out.push_str("$r3"),
+            ':' => out.push_str("$cl"),
+            ',' => out.push_str("$cm"),
+            '.' => out.push_str("$pe"),
+            '?' => out.push_str("$qu"),
+            ';' => out.push_str("$se"),
+            '|' => out.push_str("$or"),
+            '~' => out.push_str("$ti"),
+            '\'' => out.push_str("$q1"),
+            '"' => out.push_str("$q2"),
+            '!' => out.push_str("$ex"),
+            '`' => out.push_str("$bt"),
+            '@' => out.push_str("$at"),
+            c => out.push(c)
+        }
+    }
+    out.push_str(&format!("$${len}_"));
+}
+
 pub struct TypeParseCommand {
     pub cpp_file: String,
+    pub d_file: String,
     pub out_file: String,
     pub args: Vec<String>,
 }
@@ -123,14 +175,23 @@ impl TypeParseCommand {
         command.file.hash(&mut hash);
         let hash = hash.finish();
         let base_name = Path::new(&command.file).file_name_str()?;
-        let cpp_file = config
+        let output_dir = config
             .paths
             .extract_output
-            .join("clang-type-parse")
-            .join(format!("{base_name}_{hash:16x}.cpp"))
+            .join("clang-type-parse");
+        let cpp_file = output_dir
+            .join(format!("{base_name}_{hash:016x}.cpp"))
+            .into_utf8()?;
+        let d_file = output_dir
+            .join(format!("{base_name}_{hash:016x}.d"))
             .into_utf8()?;
 
         let mut args = vec![
+            "-MD".to_string(),
+            "-MT".to_string(),
+            cpp_file.clone(),
+            "-MF".to_string(),
+            d_file.clone(),
             "-Xclang".to_string(),
             "-ast-dump=json".to_string(),
             "-fsyntax-only".to_string(),
@@ -160,103 +221,158 @@ impl TypeParseCommand {
 
         Ok(Self {
             cpp_file,
+            d_file,
             out_file,
             args,
         })
     }
 
-    fn try_read_existing_output(
+    /// Try loading the cached AST JSON if the inputs are up-to-date
+    fn try_read_cached_ast(
         &self,
         new_source: &str,
-        new_requests: &GoffMap<ParseRequest<'_>>,
-    ) -> Option<GoffMap<ParseResult>> {
-        let cpp_file = Path::new(&self.cpp_file);
-        if !cpp_file.exists() {
-            return None;
-        }
-        let out_file = Path::new(&self.out_file);
-        if !out_file.exists() {
-            return None;
-        }
-        let Ok(old_content) = cu::fs::read_string(cpp_file) else {
+        new_tokens: &BTreeSet<String>,
+    ) -> Option<BTreeMap<String, Node<Ast>>> {
+        // see if cached C++ source is the same as the new source to compile 
+        let Ok(old_content) = cu::fs::read_string(&self.cpp_file) else {
             return None;
         };
         if old_content != new_source {
             // need to recompile
             return None;
         }
-        let Ok(old_output) = cu::fs::read_string(out_file) else {
+
+        // check if existing cache matches the new requests
+        let Ok(old_output) = cu::fs::read_string(&self.out_file) else {
             return None;
         };
-        let old_output = match json::parse::<GoffMap<ParseResult>>(&old_output) {
+        let old_output = match json::parse::<BTreeMap<String, Node<Ast>>>(&old_output) {
             Err(e) => {
                 cu::error!("failed to parse cached output from {}: {e:?}", self.out_file);
                 return None;
             }
             Ok(x) => x,
         };
-        let old_sources = old_output
-            .iter()
-            .map(|(k, t)| (*k, &t.source))
-            .collect::<BTreeMap<_, _>>();
-        let new_sources = new_requests
-            .iter()
-            .map(|(k, t)| (*k, &t.source))
-            .collect::<BTreeMap<_, _>>();
-        if old_sources != new_sources {
+        let old_tokens = old_output.keys().cloned().collect::<BTreeSet<_>>();
+        if &old_tokens != new_tokens {
             return None;
         }
-        cu::debug!("using cached output");
+
+        // check if any dependency changed
+        let Ok(d_file) = cu::fs::read_string(&self.d_file) else {
+            return None;
+        };
+        let Ok(d_file) = depfile::parse(&d_file) else {
+            cu::error!("failed to parse depfile from {}", self.d_file);
+            return None;
+        };
+        let Some(deps) = d_file.find(&self.cpp_file) else {
+            cu::error!("failed to find source file in depfile {}", self.d_file);
+            return None;
+        };
+        let Ok(Some(target_mtime)) = cu::fs::get_mtime(&self.cpp_file) else {
+            cu::error!("cannot get modification time for {}", self.cpp_file);
+            return None;
+        };
+        for dep in deps {
+            // ignore the source cpp file itself
+            if dep == &self.cpp_file {
+                continue;
+            }
+            let Ok(Some(mtime)) = cu::fs::get_mtime(dep.as_ref()) else {
+                return None;
+            };
+            if mtime > target_mtime {
+                // dependency changed, recompile
+                return None;
+            }
+        }
+
         Some(old_output)
+
     }
 
+    // fn try_read_existing_output(
+    //     &self,
+    //     new_source: &str,
+    //     new_requests: &GoffMap<ParseRequest<'_>>,
+    // ) -> Option<GoffMap<ParseResult>> {
+    //     let cpp_file = Path::new(&self.cpp_file);
+    //     if !cpp_file.exists() {
+    //         return None;
+    //     }
+    //     let out_file = Path::new(&self.out_file);
+    //     if !out_file.exists() {
+    //         return None;
+    //     }
+    //     let Ok(old_content) = cu::fs::read_string(cpp_file) else {
+    //         return None;
+    //     };
+    //     if old_content != new_source {
+    //         // need to recompile
+    //         return None;
+    //     }
+    //     let Ok(old_output) = cu::fs::read_string(out_file) else {
+    //         return None;
+    //     };
+    //     let old_output = match json::parse::<GoffMap<ParseResult>>(&old_output) {
+    //         Err(e) => {
+    //             cu::error!("failed to parse cached output from {}: {e:?}", self.out_file);
+    //             return None;
+    //         }
+    //         Ok(x) => x,
+    //     };
+    //     let old_sources = old_output
+    //         .iter()
+    //         .map(|(k, t)| (*k, &t.source))
+    //         .collect::<BTreeMap<_, _>>();
+    //     let new_sources = new_requests
+    //         .iter()
+    //         .map(|(k, t)| (*k, &t.source))
+    //         .collect::<BTreeMap<_, _>>();
+    //     if old_sources != new_sources {
+    //         return None;
+    //     }
+    //     cu::debug!("using cached output");
+    //     Some(old_output)
+    // }
     async fn invoke(
         &self,
         source: &str,
-        requests: &GoffMap<ParseRequest<'_>>,
-        ns: &NamespaceMaps,
-    ) -> cu::Result<GoffMap<ParseResult>> {
-        // write the source file
+        mut tokens: BTreeSet<String>,
+    ) -> cu::Result<BTreeMap<String, Node<Ast>>> {
         cu::fs::write(&self.cpp_file, source)?;
         cu::fs::remove(&self.out_file)?;
-
-        // call clang
-        let clang = cu::bin::find("clang", [cu::bin::from_env("CLANG"), cu::bin::in_PATH()])?;
-        let (child, out, err) = clang
-            .command()
-            .args(&self.args)
-            .stdout(cu::pio::string())
-            .stderr(cu::pio::string())
-            .stdin_null()
-            .co_spawn()
+        // call clang and get the AST output
+        let tu_node = {
+            let clang = cu::bin::find("clang", [cu::bin::from_env("CLANG"), cu::bin::in_PATH()])?;
+            let (child, out, err) = clang
+                .command()
+                .args(&self.args)
+                .stdout(cu::pio::string())
+                .stderr(cu::pio::string())
+                .stdin_null()
+                .co_spawn()
             .await?;
-        if let Err(e) = child.co_wait_nz().await {
-            let err = err.co_join().await??;
-            cu::error!("stderr from clang:\n{err}");
-            cu::hint!(
+            if let Err(e) = child.co_wait_nz().await {
+                let err = err.co_join().await??;
+                cu::error!("stderr from clang:\n{err}");
+                cu::hint!(
                 "failed to compile the source for type parsing - this usually means the type expression has unparsable syntax."
             );
-            cu::hint!("consider using extract.type-parser.abandon-typedefs config to exclude this name");
-            return Err(e);
-        }
+                cu::hint!("consider using extract.type-parser.abandon-typedefs config to exclude this name");
+                return Err(e);
+            }
 
-        let out = out.co_join().await??;
-        let node = json::parse::<Node<Ast>>(&out)?;
-        // force out to be deleted since it could be large
-        drop(out);
-
-        // parse the node.
+            let out = out.co_join().await??;
+            json::parse::<Node<Ast>>(&out)?
+        };
+        // only keep nodes relevant for the tokens
         cu::ensure!(
-            node.kind == Ast::TranslationUnitDecl,
+            tu_node.kind == Ast::TranslationUnitDecl,
             "outermost AST node must be TranslationUnitDecl"
         );
-        let tu_node = node;
-
-        let mut results = GoffMap::default();
-        let mut token_to_request: BTreeMap<_, _> = requests
-            .into_iter()
-            .map(|(k, r)| (format!("{PARSE_TYPE_TOKEN}_{k}"), r))
-            .collect();
+        let mut output = BTreeMap::default();
         let mut stack = vec![];
         for n in tu_node.inner.iter().rev() {
             stack.push(n);
@@ -272,17 +388,45 @@ impl TypeParseCommand {
                 continue;
             };
             let token = name.as_str();
-            let Some(request) = token_to_request.remove(token) else {
+            if !tokens.remove(token) {
                 continue;
             };
-            match parse_ast(&node, request.namespace, ns) {
+            output.insert(token.to_string(), node.clone());
+        }
+
+        if !tokens.is_empty() {
+            cu::bail!("not all tokens resolved from '{}': {tokens:?}", self.cpp_file);
+        }
+
+        // note that we are only saving part of the AST output as the entire output will be HUGE
+        // this is fine because we are not using any ID which might reference an earlier part of
+        // the tree
+
+        if let Err(e) = cu::fs::write_json_pretty(&self.out_file, &output) {
+            cu::error!("failed to save clang AST cache: {e}");
+        }
+
+        Ok(output)
+    }
+    fn parse_ast_nodes(
+        &self,
+        requests: &[ParseRequest<'_>],
+        ast_nodes: &BTreeMap<String, Node<Ast>>,
+        ns: &NamespaceMaps,
+        output: &mut GoffMap<NamespacedTemplatedName>
+    ) -> cu::Result<()> {
+        // let mut output = GoffMap::default();
+        for req in requests {
+            let node = ast_nodes.get(&req.token).unwrap();
+            match parse_ast(&node, req.namespace, ns) {
                 Ok(parsed) => {
-                    results.insert(
-                        request.goff,
-                        ParseResult {
-                            source: request.source.clone(),
-                            parsed,
-                        },
+                    output.insert(
+                        req.goff,
+                        parsed,
+                        // ParseResult {
+                        //     source: req.source.clone(),
+                        //     parsed,
+                        // },
                     );
                 }
                 Err(e) => {
@@ -297,38 +441,134 @@ impl TypeParseCommand {
                             }
                         }
                     }
-                    cu::rethrow!(e, "failed to parse result node for type name: {name}");
+                    cu::rethrow!(e, "failed to parse result node for type name: {}", req.token);
                 }
             }
         }
-
-        if let Err(e) = cu::fs::write_json_pretty(&self.out_file, &results) {
-            cu::error!("failed to save clang type parse cache: {e}");
-        }
-
-        Ok(results)
+        Ok(())
     }
+
+    // async fn invoke_old(
+    //     &self,
+    //     source: &str,
+    //     requests: &GoffMap<ParseRequest<'_>>,
+    //     ns: &NamespaceMaps,
+    // ) -> cu::Result<GoffMap<ParseResult>> {
+    //     // write the source file
+    //     cu::fs::write(&self.cpp_file, source)?;
+    //     cu::fs::remove(&self.out_file)?;
+    //
+    //     // call clang
+    //     let clang = cu::bin::find("clang", [cu::bin::from_env("CLANG"), cu::bin::in_PATH()])?;
+    //     let (child, out, err) = clang
+    //         .command()
+    //         .args(&self.args)
+    //         .stdout(cu::pio::string())
+    //         .stderr(cu::pio::string())
+    //         .stdin_null()
+    //         .co_spawn()
+    //         .await?;
+    //     if let Err(e) = child.co_wait_nz().await {
+    //         let err = err.co_join().await??;
+    //         cu::error!("stderr from clang:\n{err}");
+    //         cu::hint!(
+    //             "failed to compile the source for type parsing - this usually means the type expression has unparsable syntax."
+    //         );
+    //         cu::hint!("consider using extract.type-parser.abandon-typedefs config to exclude this name");
+    //         return Err(e);
+    //     }
+    //
+    //     let out = out.co_join().await??;
+    //     let node = json::parse::<Node<Ast>>(&out)?;
+    //     // force out to be deleted since it could be large
+    //     drop(out);
+    //
+    //     // parse the node.
+    //     cu::ensure!(
+    //         node.kind == Ast::TranslationUnitDecl,
+    //         "outermost AST node must be TranslationUnitDecl"
+    //     );
+    //     let tu_node = node;
+    //
+    //     let mut results = GoffMap::default();
+    //     let mut token_to_request: BTreeMap<_, _> = requests
+    //         .values()
+    //         .map(|(_, r)| (, r))
+    //         .collect();
+    //     let mut stack = vec![];
+    //     for n in tu_node.inner.iter().rev() {
+    //         stack.push(n);
+    //     }
+    //     while let Some(node) = stack.pop() {
+    //         if let Ast::NamespaceDecl { .. } = &node.kind {
+    //             for n in node.inner.iter().rev() {
+    //                 stack.push(n);
+    //             }
+    //             continue;
+    //         }
+    //         let Ast::TypedefDecl { name } = &node.kind else {
+    //             continue;
+    //         };
+    //         let token = name.as_str();
+    //         let Some(request) = token_to_request.remove(token) else {
+    //             continue;
+    //         };
+    //         match parse_ast(&node, request.namespace, ns) {
+    //             Ok(parsed) => {
+    //                 results.insert(
+    //                     request.goff,
+    //                     ParseResult {
+    //                         source: request.source.clone(),
+    //                         parsed,
+    //                     },
+    //                 );
+    //             }
+    //             Err(e) => {
+    //                 match json::stringify_pretty(node) {
+    //                     Err(e) => {
+    //                         cu::error!("error while serializing errored node to json: {e}");
+    //                     }
+    //                     Ok(s) => {
+    //                         let out_file = format!("{}.err.json", self.cpp_file);
+    //                         if let Err(e) = cu::fs::write(out_file, s) {
+    //                             cu::error!("error while saving errored node json: {e}");
+    //                         }
+    //                     }
+    //                 }
+    //                 cu::rethrow!(e, "failed to parse result node for type name: {name}");
+    //             }
+    //         }
+    //     }
+    //
+    //     if let Err(e) = cu::fs::write_json_pretty(&self.out_file, &results) {
+    //         cu::error!("failed to save clang type parse cache: {e}");
+    //     }
+    //
+    //     Ok(results)
+    // }
 }
 
 
 struct ParseRequest<'a> {
     /// The goff of the type
     goff: Goff,
-    /// The CPP source code that represents this type
-    source: String,
+    // /// The CPP source code that represents this type
+    // source: String,
+    /// The identifier generated from the source, independent of the goff
+    token: String,
     /// The qualifying namespace to add this type to
     namespace: &'a Namespace,
 }
 
-#[derive(Serialize, Deserialize)]
-struct ParseResult {
-    /// The CPP source code that represents this type
-    source: String,
-    /// The parsed type data
-    parsed: NamespacedTemplatedName,
-}
+// #[derive(Serialize, Deserialize)]
+// struct ParseResult {
+//     /// The CPP source code that represents this type
+//     source: String,
+//     /// The parsed type data
+//     parsed: NamespacedTemplatedName,
+// }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 enum Ast {
     TranslationUnitDecl,
     NamespaceDecl {
@@ -366,34 +606,22 @@ enum Ast {
     TypedefType {
         #[serde(rename = "type")]
         ty: AstType,
-        // decl: AstDecl,
     },
     RecordType {
         #[serde(rename = "type")]
         ty: AstType,
-        // decl: AstDecl,
     },
     EnumType {
         #[serde(rename = "type")]
         ty: AstType,
-        // decl: AstDecl,
     },
-    // Other,
-    Other {
-        kind: Option<String>,
-    },
+    Other,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AstType {
     qual_type: String,
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AstDecl {
-    name: String,
 }
 
 fn parse_ast(node: &Node<Ast>, namespace: &Namespace, nsmaps: &NamespaceMaps) -> cu::Result<NamespacedTemplatedName> {
@@ -408,7 +636,6 @@ fn parse_ast(node: &Node<Ast>, namespace: &Namespace, nsmaps: &NamespaceMaps) ->
         cu::bail!("expecting TemplateSpecializationType");
     };
 
-    // let template_name = cu::check!(template_name.as_ref(), "unexpected empty template_name")?;
     let Some(base_name) = template_name.strip_prefix(qualifier) else {
         cu::bail!("template_name must starts with qualifier. qualifier='{qualifier}', template_name='{template_name}'");
     };

@@ -1,4 +1,5 @@
 [paths]
+build-dir = "../../../botw-decomp/build"
 elf = "../../../botw-decomp/build/uking"
 compdb = "../../../botw-decomp/build/compile_commands.json"
 system-header-paths = [
@@ -20,6 +21,7 @@ address-column = 0
 symbol-column = 1
 
 [extract]
+build-command = ["ninja"]
 pointer-width = 64
 ptmd-repr = ["u64", 1]
 ptmf-repr = ["u64", 2]

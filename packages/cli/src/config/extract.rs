@@ -7,6 +7,8 @@ use crate::serde_impl::Regex;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct CfgExtract {
+    /// Command and args for building the project before extracting
+    pub build_command: Vec<String>,
     /// Pointer width for the target platform, must be 8, 16, 32 or 64
     pub pointer_width: u8,
     /// Representation of PTMD, as an array of primitive
