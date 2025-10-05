@@ -303,7 +303,7 @@ impl<'x> Die<'x, '_> {
     //     )?;
     //     Ok(value)
     // }
-    
+
     /// Get the name of the entry before the first `<`. This can only be used
     /// for types, and not function names, because of `operator<=`
     pub fn untemplated_name_opt(&self) -> cu::Result<Option<&str>> {
@@ -481,15 +481,15 @@ impl<'x> Die<'x, '_> {
 
     pub fn is_inlined(&self) -> cu::Result<bool> {
         let offset = self.goff();
-        let inline = cu::check!(self.entry.attr_value(DW_AT_inline), 
-            "failed to read DW_AT_inline for entry at offset {offset}")?;
+        let inline = cu::check!(
+            self.entry.attr_value(DW_AT_inline),
+            "failed to read DW_AT_inline for entry at offset {offset}"
+        )?;
         match inline {
             None => Ok(false),
-            Some(AttributeValue::Inline(x)) => {
-                Ok(matches!(x, DW_INL_inlined | DW_INL_declared_inlined))
-            }
+            Some(AttributeValue::Inline(x)) => Ok(matches!(x, DW_INL_inlined | DW_INL_declared_inlined)),
             _ => {
-            cu::bail!("expecting DW_AT_inline to be an inline attribute at offset {offset}")
+                cu::bail!("expecting DW_AT_inline to be an inline attribute at offset {offset}")
             }
         }
     }

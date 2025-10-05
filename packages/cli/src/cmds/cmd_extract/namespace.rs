@@ -1,8 +1,11 @@
+use std::collections::BTreeSet;
 use std::{collections::BTreeMap, sync::Arc};
 
 use cu::pre::*;
+use tyyaml::Prim;
 
 use super::pre::*;
+use super::type_structure::*;
 
 use crate::serde_impl::ArcStr;
 
@@ -161,6 +164,9 @@ impl Die<'_, '_> {
 #[debug("{}", self)]
 pub struct NamespacedName(Namespace, ArcStr);
 impl NamespacedName {
+    pub fn prim(prim: Prim) -> Self {
+        Self::unnamespaced(prim.to_str())
+    }
     pub fn unnamespaced(name: &str) -> Self {
         Self(Default::default(), name.into())
     }
@@ -194,6 +200,14 @@ impl NamespacedName {
 
     pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> {
         cu::check!(self.0.map_goff(f), "failed to map namespaced name")
+    }
+    pub fn permutated_string_reprs(&self, permutater: &mut StructuredNamePermutater) -> cu::Result<BTreeSet<String>> {
+        if self.0.is_empty() {
+            return Ok(std::iter::once(self.basename().to_string()).collect());
+        }
+
+        let namespaces = self.0.permutated_string_reprs(permutater)?;
+        Ok(namespaces.into_iter().map(|x| format!("{x}::{}", self.1)).collect())
     }
 }
 
@@ -242,6 +256,29 @@ impl Namespace {
             seg.map_goff(f)?;
         }
         Ok(())
+    }
+    pub fn permutated_string_reprs(&self, permutater: &mut StructuredNamePermutater) -> cu::Result<BTreeSet<String>> {
+        let mut output = BTreeSet::new();
+        for n in &self.0 {
+            let seg_names = cu::check!(
+                n.permutated_string_reprs(permutater),
+                "permutated_string_reprs failed for namespace {self}"
+            )?;
+            match (output.is_empty(), seg_names.is_empty()) {
+                (true, _) => output = seg_names,
+                (false, true) => {}
+                (false, false) => {
+                    // permutate
+                    let old = std::mem::take(&mut output);
+                    for name in seg_names {
+                        for prev in &old {
+                            output.insert(format!("{prev}::{name}"));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(output)
     }
 }
 
@@ -296,6 +333,16 @@ impl NameSeg {
             _ => {}
         }
         Ok(())
+    }
+    pub fn permutated_string_reprs(&self, permutator: &mut StructuredNamePermutater) -> cu::Result<BTreeSet<String>> {
+        match self {
+            Self::Name(s) => Ok(std::iter::once(s.to_string()).collect()),
+            Self::Type(k, _) => permutator.permutated_string_reprs_goff(*k),
+            Self::Subprogram(_) => {
+                cu::bail!("permutated_string_reprs does not support subprogram as namespace")
+            }
+            Self::Anonymous => Ok(BTreeSet::new()),
+        }
     }
 }
 

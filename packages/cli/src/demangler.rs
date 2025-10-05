@@ -15,21 +15,19 @@ pub struct Demangler {
 impl Demangler {
     pub fn try_new(cache_path: PathBuf) -> cu::Result<Self> {
         let cache = match cu::fs::reader(&cache_path) {
-            Ok(x) => {
-                match json::read::<DashMap<String, String>>(x) {
-                    Ok(x) => x,
-                    Err(e) => {
-                        cu::warn!("failed to load demangler cache: {e}");
-                        Default::default()
-                    }
+            Ok(x) => match json::read::<DashMap<String, String>>(x) {
+                Ok(x) => x,
+                Err(e) => {
+                    cu::warn!("failed to load demangler cache: {e}");
+                    Default::default()
                 }
-            }
-            Err(_) => Default::default()
+            },
+            Err(_) => Default::default(),
         };
         Ok(Self {
             cache,
             cache_path,
-            modification_count: AtomicUsize::new(0)
+            modification_count: AtomicUsize::new(0),
         })
     }
     pub fn demangle(&self, symbol: &str) -> cu::Result<String> {
@@ -61,15 +59,16 @@ impl Demangler {
     }
 
     fn demangle_with_cxxfilt(&self, symbol: &str) -> cu::Result<String> {
-        let cxxfilt = cu::bin::find("llvm-cxxfilt", [
-            cu::bin::from_env("CXXFILT"),
-            cu::bin::in_PATH(),
-        ]);
-        let cxxfilt = cu::check!(cxxfilt, "could not find llvm-cxxfilt (please install llvm or set CXXFILT env var to path of llvm-cxxfilt)")?;
+        let cxxfilt = cu::bin::find("llvm-cxxfilt", [cu::bin::from_env("CXXFILT"), cu::bin::in_PATH()]);
+        let cxxfilt = cu::check!(
+            cxxfilt,
+            "could not find llvm-cxxfilt (please install llvm or set CXXFILT env var to path of llvm-cxxfilt)"
+        )?;
 
-        let output = cu::check!(Command::new(cxxfilt)
-            .arg(symbol)
-            .output(), "failed to spawn cxxfilt command")?;
+        let output = cu::check!(
+            Command::new(cxxfilt).arg(symbol).output(),
+            "failed to spawn cxxfilt command"
+        )?;
         if !output.status.success() {
             return Ok(symbol.to_string());
         }
@@ -77,5 +76,3 @@ impl Demangler {
         Ok(result.trim().to_string())
     }
 }
-
-

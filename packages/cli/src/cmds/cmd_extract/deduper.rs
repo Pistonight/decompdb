@@ -4,19 +4,16 @@ use std::hash::{Hash, Hasher};
 use cu::pre::*;
 use fxhash::FxHasher;
 
+use super::bucket::GoffBuckets;
 use super::pre::*;
 use super::type_structure::*;
-use super::bucket::GoffBuckets;
 
 /// Dedupe goffs that map to the same type data
-pub fn dedupe<T : Eq + Hash,
-F
-: Fn(&mut T, &GoffBuckets) -> cu::Result<()>
->(
+pub fn dedupe<T: Eq + Hash, F: Fn(&mut T, &GoffBuckets) -> cu::Result<()>>(
     mut map: GoffMap<T>,
     mut buckets: GoffBuckets,
     symbols: &mut BTreeMap<String, SymbolInfo>,
-    mapper: F
+    mapper: F,
 ) -> cu::Result<GoffMap<T>> {
     loop {
         // must run mapper first to make sure collision and merge check
@@ -26,10 +23,16 @@ F
             use std::collections::btree_map::Entry;
 
             let k = buckets.primary_fallback(goff);
-            cu::check!(mapper(&mut t, &buckets), "failed to run mapper for {goff} (primary: {k})")?;
+            cu::check!(
+                mapper(&mut t, &buckets),
+                "failed to run mapper for {goff} (primary: {k})"
+            )?;
             match new_map.entry(k) {
                 Entry::Occupied(e) => {
-                    cu::ensure!(e.get() == &t, "failed to merge {goff} into {k}: the data are not equal after mapping, please check the mapper implementation");
+                    cu::ensure!(
+                        e.get() == &t,
+                        "failed to merge {goff} into {k}: the data are not equal after mapping, please check the mapper implementation"
+                    );
                 }
                 Entry::Vacant(e) => {
                     e.insert(t);
@@ -57,7 +60,7 @@ F
             for keys in hash_map.into_values() {
                 let keys = keys.into_iter().collect::<Vec<_>>();
                 for (i, k) in keys.iter().copied().enumerate() {
-                    for j in keys.iter().skip(i+1).copied() {
+                    for j in keys.iter().skip(i + 1).copied() {
                         let t1 = map.get(&k).unwrap();
                         let t2 = map.get(&j).unwrap();
                         if t1 == t2 {
@@ -73,13 +76,11 @@ F
             continue;
         }
 
-        let f:GoffMapFn = Box::new(
-            |k| Ok(buckets.primary_fallback(k))
-        );
+        let f: GoffMapFn = Box::new(|k| Ok(buckets.primary_fallback(k)));
         for symbol in symbols.values_mut() {
             cu::check!(symbol.map_goff(&f), "symbol mapping failed when deduping")?;
         }
 
-            return Ok(map);
+        return Ok(map);
     }
 }

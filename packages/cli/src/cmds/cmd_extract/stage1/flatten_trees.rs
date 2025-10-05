@@ -1,9 +1,9 @@
 use cu::pre::*;
 use tyyaml::Tree;
 
-use super::pre::*;
 use super::super::bucket::GoffBuckets;
 use super::super::deduper;
+use super::pre::*;
 
 pub fn flatten_trees(stage: &mut Stage0) -> cu::Result<()> {
     let mut changes = GoffMap::default();
@@ -23,11 +23,12 @@ pub fn flatten_trees(stage: &mut Stage0) -> cu::Result<()> {
                 let mut copy = data.clone();
                 let mut changed = false;
                 for targ in &mut copy.template_args {
-                    let TemplateArg::Type(tree) = targ else  {
+                    let TemplateArg::Type(tree) = targ else {
                         continue;
                     };
                     let flattened = cu::check!(
-                        flatten_by_tree(tree, &stage.types, 0), "failed to flatten union template arg for {goff}"
+                        flatten_by_tree(tree, &stage.types, 0),
+                        "failed to flatten union template arg for {goff}"
                     )?;
                     if let Some(flattened) = flattened {
                         *tree = flattened;
@@ -36,7 +37,8 @@ pub fn flatten_trees(stage: &mut Stage0) -> cu::Result<()> {
                 }
                 for member in &mut copy.members {
                     let flattened = cu::check!(
-                        flatten_by_tree(&member.ty, &stage.types, 0), "failed to flatten union member for {goff}"
+                        flatten_by_tree(&member.ty, &stage.types, 0),
+                        "failed to flatten union member for {goff}"
                     )?;
                     if let Some(flattened) = flattened {
                         member.ty = flattened;
@@ -46,16 +48,17 @@ pub fn flatten_trees(stage: &mut Stage0) -> cu::Result<()> {
                 if changed {
                     changes.push((*goff, Type0::Union(name.clone(), copy)));
                 }
-            },
+            }
             Type0::Struct(name, data) => {
                 let mut copy = data.clone();
                 let mut changed = false;
                 for targ in &mut copy.template_args {
-                    let TemplateArg::Type(tree) = targ else  {
+                    let TemplateArg::Type(tree) = targ else {
                         continue;
                     };
                     let flattened = cu::check!(
-                        flatten_by_tree(tree, &stage.types, 0), "failed to flatten struct template arg for {goff}"
+                        flatten_by_tree(tree, &stage.types, 0),
+                        "failed to flatten struct template arg for {goff}"
                     )?;
                     if let Some(flattened) = flattened {
                         *tree = flattened;
@@ -65,7 +68,8 @@ pub fn flatten_trees(stage: &mut Stage0) -> cu::Result<()> {
                 for (_, ventry) in &mut copy.vtable {
                     for tree in &mut ventry.function_types {
                         let flattened = cu::check!(
-                            flatten_by_tree(tree, &stage.types, 0), "failed to flatten struct vtable function type for {goff}"
+                            flatten_by_tree(tree, &stage.types, 0),
+                            "failed to flatten struct vtable function type for {goff}"
                         )?;
                         if let Some(flattened) = flattened {
                             *tree = flattened;
@@ -75,7 +79,8 @@ pub fn flatten_trees(stage: &mut Stage0) -> cu::Result<()> {
                 }
                 for member in &mut copy.members {
                     let flattened = cu::check!(
-                        flatten_by_tree(&member.ty, &stage.types, 0), "failed to flatten struct member for {goff}"
+                        flatten_by_tree(&member.ty, &stage.types, 0),
+                        "failed to flatten struct member for {goff}"
                     )?;
                     if let Some(flattened) = flattened {
                         member.ty = flattened;
@@ -105,11 +110,12 @@ pub fn flatten_trees(stage: &mut Stage0) -> cu::Result<()> {
             changed = true;
         }
         for targ in &mut copy.template_args {
-            let TemplateArg::Type(tree) = targ else  {
+            let TemplateArg::Type(tree) = targ else {
                 continue;
             };
             let flattened = cu::check!(
-                flatten_by_tree(tree, &stage.types, 0), "failed to flatten symbol template arg for symbol '{name}'"
+                flatten_by_tree(tree, &stage.types, 0),
+                "failed to flatten symbol template arg for symbol '{name}'"
             )?;
             if let Some(flattened) = flattened {
                 *tree = flattened;
@@ -140,9 +146,7 @@ pub fn flatten_trees(stage: &mut Stage0) -> cu::Result<()> {
         std::mem::take(&mut stage.types),
         GoffBuckets::default(),
         &mut stage.symbols,
-        |data, buckets| {
-            data.map_goff(|k| Ok(buckets.primary_fallback(k)))
-        }
+        |data, buckets| data.map_goff(|k| Ok(buckets.primary_fallback(k))),
     );
     let deduped = cu::check!(deduped, "flatten_trees: deduped failed")?;
 
@@ -157,22 +161,18 @@ fn flatten_by_goff(goff: Goff, types: &GoffMap<Type0>, depth: usize) -> cu::Resu
             // so here we always return Some
             match flatten_by_tree(tree, types, depth)? {
                 Some(x) => Ok(Some(x)),
-                None => Ok(Some(tree.clone()))
+                None => Ok(Some(tree.clone())),
             }
         }
         Type0::Alias(_) => {
             cu::bail!("stage1 flatten_tree step should not contain alias.");
-        },
-        _ => Ok(None)
+        }
+        _ => Ok(None),
     }
 }
 
 // return Some if changed
-fn flatten_by_tree(
-    tree: &Tree<Goff>,
-    types: &GoffMap<Type0>,
-    depth: usize,
-) -> cu::Result<Option<Tree<Goff>>> {
+fn flatten_by_tree(tree: &Tree<Goff>, types: &GoffMap<Type0>, depth: usize) -> cu::Result<Option<Tree<Goff>>> {
     if depth > 1000 {
         cu::bail!("max flatten depth limit reached");
     }
@@ -273,4 +273,3 @@ fn flatten_by_tree(
 
     Ok(None)
 }
-

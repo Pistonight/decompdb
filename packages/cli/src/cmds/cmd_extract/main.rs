@@ -20,22 +20,25 @@ pub struct CmdExtract {
     pub common: cu::cli::Flags,
 }
 pub fn run(config: Config) -> cu::Result<()> {
-    cu::co::run(async move {
-        run_internal(config).await
-    })
+    cu::co::run(async move { run_internal(config).await })
 }
 
 async fn run_internal(config: Config) -> cu::Result<()> {
     let config = Arc::new(config);
 
-    let build_bin = cu::check!(config.extract.build_command.first(), "missing extract.build-command in config")?;
+    let build_bin = cu::check!(
+        config.extract.build_command.first(),
+        "missing extract.build-command in config"
+    )?;
     {
-        let (child, _, _) = Path::new(build_bin).command()
-        .args(config.extract.build_command.iter().skip(1))
+        let (child, _, _) = Path::new(build_bin)
+            .command()
+            .args(config.extract.build_command.iter().skip(1))
             .current_dir(&config.paths.build_dir)
             .stderr(cu::pio::spinner("build project"))
             .stdio_null()
-            .co_spawn().await?;
+            .co_spawn()
+            .await?;
         child.co_wait_nz().await?;
     }
 
@@ -53,16 +56,19 @@ async fn run_internal(config: Config) -> cu::Result<()> {
     let bytes: Arc<[u8]> = cu::fs::read(&config.paths.elf)?.into();
     let dwarf = Dwarf::try_parse(bytes)?;
 
-    let demangler = Arc::new(Demangler::try_new(config.paths.extract_output.join("demangler_cache.json"))?);
+    let demangler = Arc::new(Demangler::try_new(
+        config.paths.extract_output.join("demangler_cache.json"),
+    )?);
     let mut symbol_list = SymbolList::default();
     symbol_list.load_data(&config.paths.data_csv)?;
-    symbol_list.load_func(&config.paths.functions_csv, Arc::clone(&demangler)).await?;
+    symbol_list
+        .load_func(&config.paths.functions_csv, Arc::clone(&demangler))
+        .await?;
     let symbol_list = Arc::new(symbol_list);
     cu::info!("loaded {} symbols from listing", symbol_list.len());
     if let Err(e) = demangler.flush_cache() {
         cu::warn!("failed to flush demangler cache: {e:?}");
     }
-
 
     let units = {
         let mut units = Vec::new();
@@ -117,9 +123,7 @@ async fn run_internal(config: Config) -> cu::Result<()> {
             let name = &stage.name;
             let command = cu::check!(compile_commands.get(name), "cannot find compile command for {name}")?;
             let command = command.clone();
-            let handle = pool.spawn(async move {
-                super::stage1::run_stage1(stage, &command).await
-            });
+            let handle = pool.spawn(async move { super::stage1::run_stage1(stage, &command).await });
             handles.push(handle);
         }
 

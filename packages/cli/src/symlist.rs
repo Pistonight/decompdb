@@ -7,7 +7,7 @@ use crate::{config::CfgCsv, demangler::Demangler};
 /// Data structure that lists symbols and their addresses
 #[derive(Default)]
 pub struct SymbolList {
-    map: BTreeMap<String, u32>
+    map: BTreeMap<String, u32>,
 }
 
 impl SymbolList {
@@ -40,10 +40,10 @@ impl SymbolList {
         let mut i = 0;
         let mut set = cu::co::set(handles);
         while let Some(result) = set.next().await {
-            i+=1;
+            i += 1;
             cu::progress!(&bar, i);
             let (symbols, addr) = cu::check!(result.flatten(), "failed to get all possible symbols")?;
-            match  symbols {
+            match symbols {
                 PossibleSymbols::Only(_) => continue,
                 PossibleSymbols::Dtor12(d1, d2) => {
                     if !map.contains_key(&d1) {
@@ -79,18 +79,27 @@ pub fn load_symbol_csv(config: &CfgCsv) -> cu::Result<BTreeMap<String, u32>> {
 
     let mut map = BTreeMap::default();
 
-    for (i, line) in content.lines().enumerate().
-        skip(config.skip_rows) {
-        let row = i+1;
+    for (i, line) in content.lines().enumerate().skip(config.skip_rows) {
+        let row = i + 1;
         let parts = line.split(',').collect::<Vec<_>>();
-        let address = cu::check!(parts.get(address_column),
-            "failed to get address column at row {row} (address_column={address_column})")?;
+        let address = cu::check!(
+            parts.get(address_column),
+            "failed to get address column at row {row} (address_column={address_column})"
+        )?;
         let address = cu::check!(cu::parse::<u64>(address), "failed to parse address at row {row}")?;
-        let rel_address = cu::check!(address.checked_sub(config.base_address), "address is less than base address at row {row}")?;
-        cu::ensure!(rel_address <= u32::MAX as u64, "relative address at row {row} is too big, this is likely wrong");
+        let rel_address = cu::check!(
+            address.checked_sub(config.base_address),
+            "address is less than base address at row {row}"
+        )?;
+        cu::ensure!(
+            rel_address <= u32::MAX as u64,
+            "relative address at row {row} is too big, this is likely wrong"
+        );
 
-        let symbol = cu::check!(parts.get(symbol_column),
-            "failed to get symbol column at row {row} (symbol_column={symbol_column})")?;
+        let symbol = cu::check!(
+            parts.get(symbol_column),
+            "failed to get symbol column at row {row} (symbol_column={symbol_column})"
+        )?;
         let symbol = symbol.trim();
 
         if symbol.is_empty() {
@@ -112,7 +121,10 @@ fn get_all_possible_symbols(symbol: &str, demangler: &Demangler) -> cu::Result<P
     }
     if is_dtor(&demangled) {
         let positions = get_positions(symbol, false);
-        cu::ensure!(!positions.is_empty(), "cannot find D0, D1 or D2 in mangled dtor symbol: {symbol}");
+        cu::ensure!(
+            !positions.is_empty(),
+            "cannot find D0, D1 or D2 in mangled dtor symbol: {symbol}"
+        );
         let mut buf = symbol.to_string();
         let mut good = None;
         for i in positions {
@@ -261,5 +273,3 @@ enum PossibleSymbols {
     Dtor12(String, String), // D1, D2
     Ctor12(String, String), // C1, C2
 }
-
-

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use cu::pre::*;
@@ -12,19 +12,19 @@ use super::pre::*;
 /// Type definitons in Stage2
 ///
 /// - Declarations are merged with the definitions
+///   - Undefined declarations become empty struct with the name
 /// - Typedef names are merged with the definitions
 /// - All compile units are linked together
-/// - Type layouts are optimized (simplified)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type2 {
     /// Pritimive type
     Prim(Prim),
     /// Enum + typedef names. The name does not include template args. could be anonymous
-    Enum(NamespacedName, Type1Enum, Vec<NamespacedTemplatedName>),
+    Enum(Option<NamespacedName>, Type1Enum, Vec<NamespacedTemplatedName>),
     /// Union + typedef names. The name does not include template args. could be anonymous
-    Union(NamespacedName, Type0Union, Vec<NamespacedTemplatedName>),
+    Union(Option<NamespacedName>, Type0Union, Vec<NamespacedTemplatedName>),
     /// Struct + typedef names. The name does not include template args. could be anonymous
-    Struct(NamespacedName, Type0Struct, Vec<NamespacedTemplatedName>),
+    Struct(Option<NamespacedName>, Type0Struct, Vec<NamespacedTemplatedName>),
 }
 
 pub struct Stage1 {
@@ -32,67 +32,83 @@ pub struct Stage1 {
     pub name: String,
     pub types: GoffMap<Type1>,
     pub config: Arc<Config>,
-    pub symbols: BTreeMap<String, SymbolInfo>
+    pub symbols: BTreeMap<String, SymbolInfo>,
 }
 
 /// Type definitons in Stage1
 ///
 /// - Aliases are merged & eliminated
-/// - Trees are flattened: A Tree::Base definitely points to a 
+/// - Trees are flattened: A Tree::Base definitely points to a
 ///   primitive, enum, union or struct.
 /// - Typedefs to composite types are eliminated
+/// - Other typedefs have their names merged into the target
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type1 {
     /// Pritimive type
     Prim(Prim),
-    /// Typedef <other> name; Other is offset in debug info.
-    /// Name could have template args
-    Typedef(NamespacedTemplatedName, Goff),
+    // /// Typedef <other> name; Other is offset in debug info.
+    // /// Name could have template args
+    // Typedef(NamespacedTemplatedName, Goff),
     /// Enum. The name does not include template args. could be anonymous
-    Enum(Option<NamespacedName>, Type1Enum),
+    Enum(Option<NamespacedName>, Type1Enum, Vec<NamespacedTemplatedName>),
     /// Declaration of an enum.
     /// Name includes template args
-    EnumDecl(NamespacedTemplatedName),
+    EnumDecl(NamespacedTemplatedName, Vec<NamespacedTemplatedName>),
     /// Union. The name does not include template args. could be anonymous
-    Union(Option<NamespacedName>, Type0Union),
+    Union(Option<NamespacedName>, Type0Union, Vec<NamespacedTemplatedName>),
     /// Declaration of union.
     /// Name includes template args
-    UnionDecl(NamespacedTemplatedName),
+    UnionDecl(NamespacedTemplatedName, Vec<NamespacedTemplatedName>),
     /// Struct or Class. The name does not include template args. could be anonymous
-    Struct(Option<NamespacedName>, Type0Struct),
+    Struct(Option<NamespacedName>, Type0Struct, Vec<NamespacedTemplatedName>),
     /// Declaration of struct or class.
     /// Name includes template args
-    StructDecl(NamespacedTemplatedName),
+    StructDecl(NamespacedTemplatedName, Vec<NamespacedTemplatedName>),
 }
 impl Type1 {
     pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
         let f: GoffMapFn = Box::new(f);
         match self {
             Type1::Prim(_) => {}
-            Type1::Typedef(name, goff) => {
-                cu::check!(name.map_goff(&f), "failed to map name for typedef")?;
-                *goff = cu::check!(f(*goff), "failed to map typedef goff {goff}")?;
-            }
-            Type1::Enum(name, _) => {
+            // Type1::Typedef(name, goff) => {
+            //     cu::check!(name.map_goff(&f), "failed to map name for typedef")?;
+            //     *goff = cu::check!(f(*goff), "failed to map typedef goff {goff}")?;
+            // }
+            Type1::Enum(name, _, decl_names) => {
                 if let Some(name) = name {
                     cu::check!(name.map_goff(&f), "failed to map name for enum")?;
                 }
+                for n in decl_names {
+                    cu::check!(n.map_goff(&f), "failed to map decl name for enum")?;
+                }
             }
-            Type1::EnumDecl(name) => {
+            Type1::EnumDecl(name, typedef_names) => {
                 cu::check!(name.map_goff(&f), "failed to map name for enum decl")?;
+                for n in typedef_names {
+                    cu::check!(n.map_goff(&f), "failed to map typedef name for enum decl")?;
+                }
             }
-            Type1::Union(name, data) => {
+            Type1::Union(name, data, decl_names) => {
                 if let Some(name) = name {
                     cu::check!(name.map_goff(&f), "failed to map name for union")?;
                 }
+                for n in decl_names {
+                    cu::check!(n.map_goff(&f), "failed to map decl name for union")?;
+                }
                 cu::check!(data.map_goff(&f), "failed to map union")?;
             }
-            Type1::UnionDecl(name) => {
+            Type1::UnionDecl(name, typedef_names) => {
                 cu::check!(name.map_goff(&f), "failed to map name for union decl")?;
+                for n in typedef_names {
+                    cu::check!(n.map_goff(&f), "failed to map typedef name for union decl")?;
+                }
             }
-            Type1::Struct(name, data) => {
+            Type1::Struct(name, data, decl_names) => {
                 if let Some(name) = name {
                     cu::check!(name.map_goff(&f), "failed to map name for struct")?;
+                }
+                for n in decl_names {
+                    cu::check!(n.map_goff(&f), "failed to map decl name for struct")?;
                 }
                 for m in &mut data.members {
                     cu::check!(m.map_goff(&f), "failed to map struct members")?;
@@ -101,8 +117,11 @@ impl Type1 {
                     cu::check!(e.map_goff(&f), "failed to map struct vtable entry")?;
                 }
             }
-            Type1::StructDecl(name) => {
+            Type1::StructDecl(name, typedef_names) => {
                 cu::check!(name.map_goff(&f), "failed to map name for struct decl")?;
+                for n in typedef_names {
+                    cu::check!(n.map_goff(&f), "failed to map typedef name for union decl")?;
+                }
             }
         }
         Ok(())
@@ -115,7 +134,7 @@ pub struct Stage0 {
     pub types: GoffMap<Type0>,
     pub config: Arc<Config>,
     pub ns: NamespaceMaps,
-    pub symbols: BTreeMap<String, SymbolInfo>
+    pub symbols: BTreeMap<String, SymbolInfo>,
 }
 
 /// Type definitions in Stage0
@@ -152,7 +171,7 @@ pub enum Type0 {
 
 impl Type0 {
     /// Run goff conversion on nested type data
-    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> { 
+    pub fn map_goff<F: Fn(Goff) -> cu::Result<Goff>>(&mut self, f: F) -> cu::Result<()> {
         let f: GoffMapFn = Box::new(f);
         match self {
             Type0::Prim(_) => {}
@@ -163,7 +182,7 @@ impl Type0 {
             Type0::Alias(inner) => {
                 *inner = cu::check!(f(*inner), "failed to map alias -> {inner}")?;
             }
-            Type0::Enum(name, _) => { 
+            Type0::Enum(name, _) => {
                 if let Some(name) = name {
                     cu::check!(name.map_goff(&f), "failed to map type in enum name")?;
                 }
@@ -231,21 +250,21 @@ impl Type0 {
                     let TemplateArg::Type(tree) = targ else {
                         continue;
                     };
-                    let _: Result<_, _> =  tree.for_each(|goff| {
+                    let _: Result<_, _> = tree.for_each(|goff| {
                         marked.insert(*goff);
                         Ok(())
                     });
                 }
                 for (_, ventry) in &data.vtable {
                     for t in &ventry.function_types {
-  let _: Result<_, _> =                        t.for_each(|goff| {
+                        let _: Result<_, _> = t.for_each(|goff| {
                             marked.insert(*goff);
                             Ok(())
                         });
                     }
                 }
                 for member in &data.members {
-                    let _: Result<_, _> =  member.ty.for_each(|goff| {
+                    let _: Result<_, _> = member.ty.for_each(|goff| {
                         marked.insert(*goff);
                         Ok(())
                     });
@@ -253,7 +272,7 @@ impl Type0 {
                 marked.insert(self_goff);
             }
             Type0::Tree(tree) => {
-  let _: Result<_, _> =                tree.for_each(|goff| {
+                let _: Result<_, _> = tree.for_each(|goff| {
                     marked.insert(*goff);
                     Ok(())
                 });
@@ -267,7 +286,6 @@ impl Type0 {
             }
         }
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -295,7 +313,6 @@ impl Type1Enum {
         Ok(())
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Type0Enum {
@@ -392,7 +409,7 @@ pub struct Type0Struct {
 
 impl Type0Struct {
     /// Run goff conversion on nested type data
-    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> { 
+    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> {
         for targ in &mut self.template_args {
             cu::check!(targ.map_goff(f), "failed to map struct template args")?;
         }
@@ -528,7 +545,7 @@ impl Member {
     }
 
     /// Run goff conversion on nested type data
-    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> { 
+    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> {
         cu::check!(
             self.ty.for_each_mut(|r| {
                 *r = f(*r)?;
@@ -619,6 +636,74 @@ pub enum SpecialMember {
     Bitfield(u32), // byte_size
 }
 
+pub struct StructuredNamePermutater {
+    names: GoffMap<Vec<StructuredName>>,
+    cache: GoffMap<BTreeSet<String>>,
+    depth: usize,
+}
+
+impl StructuredNamePermutater {
+    pub fn new(names: GoffMap<Vec<StructuredName>>) -> Self {
+        Self {
+            names,
+            cache: Default::default(),
+            depth: 0,
+        }
+    }
+    pub fn permutated_string_reprs_goff(&mut self, goff: Goff) -> cu::Result<BTreeSet<String>> {
+        if let Some(x) = self.cache.get(&goff) {
+            return Ok(x.clone());
+        }
+        self.depth += 1;
+        cu::ensure!(self.depth < 512, "permutated_string_reprs depth limit exceeded");
+        let mut output = BTreeSet::new();
+        let names = self.names.get(&goff).unwrap().clone();
+        for n in names {
+            output.extend(n.permutated_string_reprs(self)?);
+        }
+        self.cache.insert(goff, output.clone());
+        self.depth -= 1;
+
+        Ok(output)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum StructuredName {
+    Name(NamespacedTemplatedName),
+    Goff(NamespacedName, Vec<TemplateArg<Goff>>),
+}
+
+impl StructuredName {
+    pub fn permutated_string_reprs(&self, permutater: &mut StructuredNamePermutater) -> cu::Result<BTreeSet<String>> {
+        match self {
+            Self::Name(name) => name.permutated_string_reprs(permutater),
+            Self::Goff(base, templates) => {
+                let base_names = cu::check!(
+                    base.permutated_string_reprs(permutater),
+                    "failed to compute base permutations for namespaced templated name"
+                )?;
+                let mut template_names = Vec::with_capacity(templates.len());
+                for t in templates {
+                    let n = cu::check!(
+                        t.permutated_string_reprs(permutater),
+                        "failed to compute template permutations for namespaced templated name"
+                    )?;
+                    template_names.push(n);
+                }
+                let template_names = permute(&template_names);
+                let mut output = BTreeSet::new();
+                for base in base_names {
+                    for templates in &template_names {
+                        output.insert(format!("{base}<{}>", templates.join(", ")));
+                    }
+                }
+                Ok(output)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NamespacedTemplatedName {
     /// The untemplated base name (with namespace)
@@ -637,12 +722,34 @@ impl NamespacedTemplatedName {
         Self { base, templates }
     }
     /// Run goff conversion on nested type data
-    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> { 
+    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> {
         self.base.map_goff(f)?;
         for targ in &mut self.templates {
             targ.map_goff(&f)?;
         }
         Ok(())
+    }
+    pub fn permutated_string_reprs(&self, permutater: &mut StructuredNamePermutater) -> cu::Result<BTreeSet<String>> {
+        let base_names = cu::check!(
+            self.base.permutated_string_reprs(permutater),
+            "failed to compute base permutations for namespaced templated name"
+        )?;
+        let mut template_names = Vec::with_capacity(self.templates.len());
+        for t in &self.templates {
+            let n = cu::check!(
+                t.permutated_string_reprs(permutater),
+                "failed to compute template permutations for namespaced templated name"
+            )?;
+            template_names.push(n);
+        }
+        let template_names = permute(&template_names);
+        let mut output = BTreeSet::new();
+        for base in base_names {
+            for templates in &template_names {
+                output.insert(format!("{base}<{}>", templates.join(", ")));
+            }
+        }
+        Ok(output)
     }
 }
 impl TreeRepr for NamespacedTemplatedName {
@@ -669,12 +776,12 @@ pub enum TemplateArg<T: TreeRepr> {
 
     /// A constant value assigned by compiler (like a function address)
     #[display("[static]")]
-    StaticConst
+    StaticConst,
 }
 
 impl TemplateArg<Goff> {
     /// Run goff conversion on nested type data
-    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> { 
+    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> {
         let Self::Type(tree) = self else {
             return Ok(());
         };
@@ -697,22 +804,241 @@ impl TemplateArg<Goff> {
             Ok(())
         });
     }
+    pub fn permutated_string_reprs(&self, permutater: &mut StructuredNamePermutater) -> cu::Result<BTreeSet<String>> {
+        match self {
+            TemplateArg::Const(x) => Ok(std::iter::once(x.to_string()).collect()),
+            TemplateArg::Type(tree) => tree_goff_permutated_string_reprs(tree, permutater),
+            TemplateArg::StaticConst => Ok(std::iter::once("[static]".to_string()).collect()),
+        }
+    }
 }
 
 impl TemplateArg<NamespacedTemplatedName> {
     /// Run goff conversion on nested type data
-    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> { 
+    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> {
         let Self::Type(tree) = self else {
             return Ok(());
         };
         cu::check!(
-            tree.for_each_mut(|r| {
-                r.map_goff(f)
-            }),
+            tree.for_each_mut(|r| { r.map_goff(f) }),
             "failed to map template arg name"
         )?;
         Ok(())
     }
+    pub fn permutated_string_reprs(&self, permutater: &mut StructuredNamePermutater) -> cu::Result<BTreeSet<String>> {
+        match self {
+            TemplateArg::Const(x) => Ok(std::iter::once(x.to_string()).collect()),
+            TemplateArg::Type(tree) => tree_name_permutated_string_reprs(tree, permutater),
+            TemplateArg::StaticConst => Ok(std::iter::once("[static]".to_string()).collect()),
+        }
+    }
+}
+fn tree_goff_permutated_string_reprs(
+    tree: &Tree<Goff>,
+    permutater: &mut StructuredNamePermutater,
+) -> cu::Result<BTreeSet<String>> {
+    match tree {
+        Tree::Base(k) => permutater.permutated_string_reprs_goff(*k),
+        Tree::Array(base, len) => {
+            let base_names = cu::check!(
+                tree_goff_permutated_string_reprs(base, permutater),
+                "failed to compute array base permutations"
+            )?;
+            Ok(base_names.into_iter().map(|x| format!("{x}[{len}]")).collect())
+        }
+        Tree::Ptr(pointee) => {
+            if let Tree::Sub(args) = pointee.as_ref() {
+                let mut inner_names = Vec::with_capacity(args.len());
+                for a in args {
+                    let n = cu::check!(
+                        tree_goff_permutated_string_reprs(a, permutater),
+                        "failed to compute permutations for subroutine type"
+                    )?;
+                    inner_names.push(n);
+                }
+                let mut output = BTreeSet::default();
+                for arg_names in permute(&inner_names) {
+                    let n = format!("{}(*)({})", arg_names[0], arg_names[1..].join(", "));
+                    output.insert(n);
+                }
+                Ok(output)
+            } else {
+                let base_names = cu::check!(
+                    tree_goff_permutated_string_reprs(pointee, permutater),
+                    "failed to compute pointee permutations"
+                )?;
+                Ok(base_names.into_iter().map(|x| format!("{x}*")).collect())
+            }
+        }
+        Tree::Sub(args) => {
+            let mut inner_names = Vec::with_capacity(args.len());
+            for a in args {
+                let n = cu::check!(
+                    tree_goff_permutated_string_reprs(a, permutater),
+                    "failed to compute permutations for subroutine type"
+                )?;
+                inner_names.push(n);
+            }
+            let mut output = BTreeSet::default();
+            for arg_names in permute(&inner_names) {
+                let n = format!("{}({})", arg_names[0], arg_names[1..].join(", "));
+                output.insert(n);
+            }
+            Ok(output)
+        }
+        Tree::Ptmd(base, pointee) => {
+            let base_names = cu::check!(
+                permutater.permutated_string_reprs_goff(*base),
+                "failed to compute ptmd base permutations"
+            )?;
+            let pointee_names = cu::check!(
+                tree_goff_permutated_string_reprs(pointee, permutater),
+                "failed to compute ptmd pointee permutations"
+            )?;
+            let mut output = BTreeSet::default();
+            for base_n in base_names {
+                for pointee_n in &pointee_names {
+                    output.insert(format!("{pointee_n} {base_n}::*"));
+                }
+            }
+            Ok(output)
+        }
+        Tree::Ptmf(base, args) => {
+            let base_names = cu::check!(
+                permutater.permutated_string_reprs_goff(*base),
+                "failed to compute ptmf base permutations"
+            )?;
+            let mut inner_names = Vec::with_capacity(args.len());
+            for a in args {
+                let n = cu::check!(
+                    tree_goff_permutated_string_reprs(a, permutater),
+                    "failed to compute permutations for ptmf subroutine args"
+                )?;
+                inner_names.push(n);
+            }
+            let arg_names = permute(&inner_names);
+
+            let mut output = BTreeSet::default();
+            for base_n in base_names {
+                for arg_n in &arg_names {
+                    let retty = &arg_n[0];
+                    output.insert(format!("{retty} ({base_n}::*)({})", arg_n[1..].join(", ")));
+                }
+            }
+            Ok(output)
+        }
+    }
+}
+
+fn tree_name_permutated_string_reprs(
+    tree: &Tree<NamespacedTemplatedName>,
+    permutater: &mut StructuredNamePermutater,
+) -> cu::Result<BTreeSet<String>> {
+    match tree {
+        Tree::Base(name) => name.permutated_string_reprs(permutater),
+        Tree::Array(name, len) => {
+            let base_names = cu::check!(
+                tree_name_permutated_string_reprs(name, permutater),
+                "failed to compute array base permutations"
+            )?;
+            Ok(base_names.into_iter().map(|x| format!("{x}[{len}]")).collect())
+        }
+        Tree::Ptr(name) => {
+            if let Tree::Sub(args) = name.as_ref() {
+                let mut inner_names = Vec::with_capacity(args.len());
+                for a in args {
+                    let n = cu::check!(
+                        tree_name_permutated_string_reprs(a, permutater),
+                        "failed to compute permutations for subroutine type"
+                    )?;
+                    inner_names.push(n);
+                }
+                let mut output = BTreeSet::default();
+                for arg_names in permute(&inner_names) {
+                    let n = format!("{}(*)({})", arg_names[0], arg_names[1..].join(", "));
+                    output.insert(n);
+                }
+                Ok(output)
+            } else {
+                let base_names = cu::check!(
+                    tree_name_permutated_string_reprs(name, permutater),
+                    "failed to compute pointee permutations"
+                )?;
+                Ok(base_names.into_iter().map(|x| format!("{x}*")).collect())
+            }
+        }
+        Tree::Sub(args) => {
+            let mut inner_names = Vec::with_capacity(args.len());
+            for a in args {
+                let n = cu::check!(
+                    tree_name_permutated_string_reprs(a, permutater),
+                    "failed to compute permutations for subroutine type"
+                )?;
+                inner_names.push(n);
+            }
+            let mut output = BTreeSet::default();
+            for arg_names in permute(&inner_names) {
+                let n = format!("{}({})", arg_names[0], arg_names[1..].join(", "));
+                output.insert(n);
+            }
+            Ok(output)
+        }
+        Tree::Ptmd(base, pointee) => {
+            let base_names = cu::check!(
+                base.permutated_string_reprs(permutater),
+                "failed to compute ptmd base permutations"
+            )?;
+            let pointee_names = cu::check!(
+                tree_name_permutated_string_reprs(pointee, permutater),
+                "failed to compute ptmd pointee permutations"
+            )?;
+            let mut output = BTreeSet::default();
+            for base_n in base_names {
+                for pointee_n in &pointee_names {
+                    output.insert(format!("{pointee_n} {base_n}::*"));
+                }
+            }
+            Ok(output)
+        }
+        Tree::Ptmf(base, args) => {
+            let base_names = cu::check!(
+                base.permutated_string_reprs(permutater),
+                "failed to compute ptmf base permutations"
+            )?;
+            let mut inner_names = Vec::with_capacity(args.len());
+            for a in args {
+                let n = cu::check!(
+                    tree_name_permutated_string_reprs(a, permutater),
+                    "failed to compute permutations for ptmf subroutine args"
+                )?;
+                inner_names.push(n);
+            }
+            let arg_names = permute(&inner_names);
+
+            let mut output = BTreeSet::default();
+            for base_n in base_names {
+                for arg_n in &arg_names {
+                    let retty = &arg_n[0];
+                    output.insert(format!("{retty} ({base_n}::*)({})", arg_n[1..].join(", ")));
+                }
+            }
+            Ok(output)
+        }
+    }
+}
+
+fn permute(input: &[BTreeSet<String>]) -> Vec<Vec<String>> {
+    if input.is_empty() {
+        return vec![];
+    }
+    let recur_output = permute(&input[..input.len() - 1]);
+    let mut output = Vec::with_capacity(recur_output.len() * input.len());
+    for last in input.last().unwrap() {
+        for prev in &recur_output {
+            output.push(prev.iter().cloned().chain(std::iter::once(last.clone())).collect());
+        }
+    }
+    output
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -734,20 +1060,20 @@ pub struct SymbolInfo {
 
 impl SymbolInfo {
     pub fn new_data(linkage_name: String, ty: Goff) -> Self {
-        Self { 
+        Self {
             address: 0,
             link_name: linkage_name,
             ty: Tree::Base(ty),
-            // is_func: false, 
+            // is_func: false,
             param_names: vec![],
             template_args: Default::default(),
         }
     }
     pub fn new_func(
-        linkage_name: String, 
+        linkage_name: String,
         types: Vec<Tree<Goff>>,
         mut param_names: Vec<String>,
-        template_args: Vec<TemplateArg<Goff>>
+        template_args: Vec<TemplateArg<Goff>>,
     ) -> Self {
         // fill in empty param names
         let mut changes = vec![];
@@ -758,7 +1084,7 @@ impl SymbolInfo {
             let mut j = i;
             let mut new_name = format!("a{j}");
             while param_names.iter().any(|x| x == &new_name) {
-                j+=1;
+                j += 1;
                 new_name = format!("a{j}");
             }
             changes.push((i, new_name));
@@ -766,7 +1092,7 @@ impl SymbolInfo {
         for (i, name) in changes {
             param_names[i] = name;
         }
-        Self { 
+        Self {
             address: 0,
             link_name: linkage_name,
             ty: Tree::Sub(types),
@@ -775,7 +1101,7 @@ impl SymbolInfo {
         }
     }
     /// Run goff conversion on nested type data
-    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> { 
+    pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> {
         cu::check!(
             self.ty.for_each_mut(|r| {
                 *r = f(*r)?;
@@ -800,17 +1126,28 @@ impl SymbolInfo {
         }
     }
     pub fn merge(&mut self, other: &Self) -> cu::Result<()> {
-        cu::ensure!(self.link_name == other.link_name, "cannot merge symbol info with different linkage names: {} != {}", self.link_name, other.link_name);
+        cu::ensure!(
+            self.link_name == other.link_name,
+            "cannot merge symbol info with different linkage names: {} != {}",
+            self.link_name,
+            other.link_name
+        );
         cu::ensure!(self.ty == other.ty, "cannot merge symbol info with different types");
-        cu::ensure!(self.param_names == other.param_names, "cannot merge symbol info with different param_names");
+        cu::ensure!(
+            self.param_names == other.param_names,
+            "cannot merge symbol info with different param_names"
+        );
         // some info does not have template args, in which case we fill it in
         match (self.template_args.is_empty(), other.template_args.is_empty()) {
-            (_, true) => {},
+            (_, true) => {}
             (true, false) => {
                 self.template_args = other.template_args.clone();
             }
             (false, false) => {
-                cu::ensure!(self.template_args == other.template_args, "cannot merge symbol info with different template_args");
+                cu::ensure!(
+                    self.template_args == other.template_args,
+                    "cannot merge symbol info with different template_args"
+                );
             }
         }
         Ok(())

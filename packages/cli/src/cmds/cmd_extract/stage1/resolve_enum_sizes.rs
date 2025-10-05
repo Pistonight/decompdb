@@ -11,17 +11,13 @@ const RESOLVING: u32 = 0;
 pub fn resolve_enum_sizes(stage0: &mut Stage0) -> cu::Result<()> {
     let mut resolver = cu::check!(SizeResolver::try_new(&stage0.config), "failed to create size resolver")?;
     for (goff, data) in &stage0.types {
-        let Type0::Enum(_, data) = data else {
-            continue
-        };
+        let Type0::Enum(_, data) = data else { continue };
         if data.byte_size_or_base.is_err() {
             resolver.get_size(*goff, stage0)?;
         }
     }
     for (goff, data) in &mut stage0.types {
-        let Type0::Enum(_, data) = data else {
-            continue
-        };
+        let Type0::Enum(_, data) = data else { continue };
         if data.byte_size_or_base.is_ok() {
             continue;
         }
@@ -32,7 +28,7 @@ pub fn resolve_enum_sizes(stage0: &mut Stage0) -> cu::Result<()> {
 }
 
 struct SizeResolver {
-    sizes: GoffMap<u32>
+    sizes: GoffMap<u32>,
 }
 
 impl SizeResolver {
@@ -44,9 +40,7 @@ impl SizeResolver {
         for p in Prim::iter() {
             sizes.insert(Goff::prim(p), p.byte_size().unwrap_or(UNSIZED));
         }
-        Ok(Self {
-            sizes
-        })
+        Ok(Self { sizes })
     }
     /// Resolve the size of the given type Goff, adds the size to the sizes map.
     pub fn get_size(&mut self, goff: Goff, stage0: &Stage0) -> cu::Result<u32> {
@@ -81,81 +75,78 @@ impl SizeResolver {
                 )?;
                 size
             }
-        Type0::Enum(_, data) => {
-            let size = match data.byte_size_or_base {
-                Ok(size) => size,
-                Err(inner) => {
-                    self.sizes.insert(goff, RESOLVING);
-                    let size = cu::check!(
-                        self.get_size(inner, stage0),
-                        "failed to resolve size for enum base type {goff} -> {inner}"
-                    )?;
-                    size
-                }
-            };
-            cu::ensure!(size != 0, "unexpected zero-sized enum: {goff}");
-            cu::ensure!(size != UNSIZED, "unexpected unsized enum: {goff}");
-            size
-        }
-        Type0::EnumDecl(_, _) => {
-            cu::bail!("encountered declaration while resolving size: enum decl {goff}");
-        }
-        Type0::Union(_, data) => {
-            // verify size is the same as largest member
-            self.sizes.insert(goff, RESOLVING);
-            let size = data.byte_size;
-            let mut max_size = 0;
-            for member in &data.members {
-                let size = cu::check!(
-                    self.get_tree_size(&member.ty, stage0),
-                    "failed to resolve size for union member type {goff} -> {}",
-                    member.ty
-                )?;
-                max_size = size.max(max_size);
+            Type0::Enum(_, data) => {
+                let size = match data.byte_size_or_base {
+                    Ok(size) => size,
+                    Err(inner) => {
+                        self.sizes.insert(goff, RESOLVING);
+                        let size = cu::check!(
+                            self.get_size(inner, stage0),
+                            "failed to resolve size for enum base type {goff} -> {inner}"
+                        )?;
+                        size
+                    }
+                };
+                cu::ensure!(size != 0, "unexpected zero-sized enum: {goff}");
+                cu::ensure!(size != UNSIZED, "unexpected unsized enum: {goff}");
+                size
             }
-            cu::ensure!(
-                max_size == size,
-                "unexpected union size mismatch: largest member size is 0x{max_size:x}, but self size is 0x{size:x}"
-            );
-            cu::ensure!(size != 0, "unexpected zero-sized union: {goff}");
-            cu::ensure!(size != UNSIZED, "unexpected unsized union: {goff}");
-            size
-        }
-        Type0::UnionDecl(_, _) => {
-            cu::bail!("encountered declaration while resolving size: union decl {goff}");
-        }
-        Type0::Struct(_, data) => {
-            let size = data.byte_size;
-            cu::ensure!(size != 0, "unexpected zero-sized struct: {goff}");
-            cu::ensure!(size != UNSIZED, "unexpected unsized struct: {goff}");
-            size
-        }
-        Type0::StructDecl(_, _) => {
-            cu::bail!("encountered declaration while resolving size: struct decl {goff}");
-        }
-        Type0::Tree(ty_tree) => {
-            self.sizes.insert(goff, RESOLVING);
-            let size = cu::check!(
-                self.get_tree_size(ty_tree, stage0),
-                "failed to resolve size for type tree: {goff}"
-            )?;
-            size
-        }
-    };
+            Type0::EnumDecl(_, _) => {
+                cu::bail!("encountered declaration while resolving size: enum decl {goff}");
+            }
+            Type0::Union(_, data) => {
+                // verify size is the same as largest member
+                self.sizes.insert(goff, RESOLVING);
+                let size = data.byte_size;
+                let mut max_size = 0;
+                for member in &data.members {
+                    let size = cu::check!(
+                        self.get_tree_size(&member.ty, stage0),
+                        "failed to resolve size for union member type {goff} -> {}",
+                        member.ty
+                    )?;
+                    max_size = size.max(max_size);
+                }
+                cu::ensure!(
+                    max_size == size,
+                    "unexpected union size mismatch: largest member size is 0x{max_size:x}, but self size is 0x{size:x}"
+                );
+                cu::ensure!(size != 0, "unexpected zero-sized union: {goff}");
+                cu::ensure!(size != UNSIZED, "unexpected unsized union: {goff}");
+                size
+            }
+            Type0::UnionDecl(_, _) => {
+                cu::bail!("encountered declaration while resolving size: union decl {goff}");
+            }
+            Type0::Struct(_, data) => {
+                let size = data.byte_size;
+                cu::ensure!(size != 0, "unexpected zero-sized struct: {goff}");
+                cu::ensure!(size != UNSIZED, "unexpected unsized struct: {goff}");
+                size
+            }
+            Type0::StructDecl(_, _) => {
+                cu::bail!("encountered declaration while resolving size: struct decl {goff}");
+            }
+            Type0::Tree(ty_tree) => {
+                self.sizes.insert(goff, RESOLVING);
+                let size = cu::check!(
+                    self.get_tree_size(ty_tree, stage0),
+                    "failed to resolve size for type tree: {goff}"
+                )?;
+                size
+            }
+        };
 
-    // insert the actual size
-    cu::ensure!(size != RESOLVING, "unexpected invalid size for type {goff}");
-    self.sizes.insert(goff, size);
-    Ok(size)
-}
+        // insert the actual size
+        cu::ensure!(size != RESOLVING, "unexpected invalid size for type {goff}");
+        self.sizes.insert(goff, size);
+        Ok(size)
+    }
     pub fn get_tree_size(&mut self, tree: &Tree<Goff>, stage0: &Stage0) -> cu::Result<u32> {
         match tree {
             Tree::Base(inner) => {
                 let inner = *inner;
-                cu::check!(
-                    self.get_size(inner, stage0),
-                    "failed to resolve size for type {inner}"
-                )
+                cu::check!(self.get_size(inner, stage0), "failed to resolve size for type {inner}")
             }
             Tree::Array(elemty, len) => {
                 let len = *len;
@@ -174,4 +165,3 @@ impl SizeResolver {
         }
     }
 }
-

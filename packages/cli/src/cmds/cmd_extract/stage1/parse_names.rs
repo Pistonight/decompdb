@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use cu::pre::*;
-use tyyaml::Tree;
 use clang_ast::Node;
+use cu::pre::*;
 use fxhash::FxHasher64;
+use tyyaml::Tree;
 
-use crate::config::{Config, CompileCommand};
+use crate::config::{CompileCommand, Config};
 
 use super::pre::*;
 
@@ -87,9 +87,11 @@ pub async fn parse_names(stage: &Stage0, command: &CompileCommand) -> cu::Result
     if !requests.is_empty() {
         let ast_nodes = match command.try_read_cached_ast(&source, &tokens) {
             Some(x) => x,
-            None => {
-                cu::check!(command.invoke(&source, tokens).await, "failed to invoke AST parse command for: {}", stage.name)?
-            }
+            None => cu::check!(
+                command.invoke(&source, tokens).await,
+                "failed to invoke AST parse command for: {}",
+                stage.name
+            )?,
         };
         command.parse_ast_nodes(&requests, &ast_nodes, &stage.ns, &mut final_names)?;
     }
@@ -144,7 +146,7 @@ fn clean_segment(seg: &str, out: &mut String) {
             '!' => out.push_str("$ex"),
             '`' => out.push_str("$bt"),
             '@' => out.push_str("$at"),
-            c => out.push(c)
+            c => out.push(c),
         }
     }
     out.push_str(&format!("$${len}_"));
@@ -164,16 +166,9 @@ impl TypeParseCommand {
         command.file.hash(&mut hash);
         let hash = hash.finish();
         let base_name = Path::new(&command.file).file_name_str()?;
-        let output_dir = config
-            .paths
-            .extract_output
-            .join("clang-type-parse");
-        let cpp_file = output_dir
-            .join(format!("{base_name}_{hash:016x}.cpp"))
-            .into_utf8()?;
-        let d_file = output_dir
-            .join(format!("{base_name}_{hash:016x}.d"))
-            .into_utf8()?;
+        let output_dir = config.paths.extract_output.join("clang-type-parse");
+        let cpp_file = output_dir.join(format!("{base_name}_{hash:016x}.cpp")).into_utf8()?;
+        let d_file = output_dir.join(format!("{base_name}_{hash:016x}.d")).into_utf8()?;
 
         let mut args = vec![
             "-MD".to_string(),
@@ -222,7 +217,7 @@ impl TypeParseCommand {
         new_source: &str,
         new_tokens: &BTreeSet<String>,
     ) -> Option<BTreeMap<String, Node<Ast>>> {
-        // see if cached C++ source is the same as the new source to compile 
+        // see if cached C++ source is the same as the new source to compile
         let Ok(old_content) = cu::fs::read_string(&self.cpp_file) else {
             return None;
         };
@@ -278,14 +273,9 @@ impl TypeParseCommand {
         }
 
         Some(old_output)
-
     }
 
-    async fn invoke(
-        &self,
-        source: &str,
-        mut tokens: BTreeSet<String>,
-    ) -> cu::Result<BTreeMap<String, Node<Ast>>> {
+    async fn invoke(&self, source: &str, mut tokens: BTreeSet<String>) -> cu::Result<BTreeMap<String, Node<Ast>>> {
         cu::fs::write(&self.cpp_file, source)?;
         cu::fs::remove(&self.out_file)?;
         // call clang and get the AST output
@@ -298,13 +288,13 @@ impl TypeParseCommand {
                 .stderr(cu::pio::string())
                 .stdin_null()
                 .co_spawn()
-            .await?;
+                .await?;
             if let Err(e) = child.co_wait_nz().await {
                 let err = err.co_join().await??;
                 cu::error!("stderr from clang:\n{err}");
                 cu::hint!(
-                "failed to compile the source for type parsing - this usually means the type expression has unparsable syntax."
-            );
+                    "failed to compile the source for type parsing - this usually means the type expression has unparsable syntax."
+                );
                 cu::hint!("consider using extract.type-parser.abandon-typedefs config to exclude this name");
                 return Err(e);
             }
@@ -358,17 +348,14 @@ impl TypeParseCommand {
         requests: &[ParseRequest<'_>],
         ast_nodes: &BTreeMap<String, Node<Ast>>,
         ns: &NamespaceMaps,
-        output: &mut GoffMap<NamespacedTemplatedName>
+        output: &mut GoffMap<NamespacedTemplatedName>,
     ) -> cu::Result<()> {
         // let mut output = GoffMap::default();
         for req in requests {
             let node = ast_nodes.get(&req.token).unwrap();
             match parse_ast(&node, req.namespace, ns) {
                 Ok(parsed) => {
-                    output.insert(
-                        req.goff,
-                        parsed,
-                    );
+                    output.insert(req.goff, parsed);
                 }
                 Err(e) => {
                     match json::stringify_pretty(node) {
@@ -388,9 +375,7 @@ impl TypeParseCommand {
         }
         Ok(())
     }
-
 }
-
 
 struct ParseRequest<'a> {
     /// The goff of the type

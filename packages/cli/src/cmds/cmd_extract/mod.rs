@@ -6,10 +6,10 @@ pub use main::*;
 mod dwarf_parse;
 
 mod bucket;
-mod name_comparator;
-mod namespace;
 mod deduper;
 mod garbage_collector;
+mod name_comparator;
+mod namespace;
 
 // mod stage0_clang_parse;
 mod stage0_loader;
@@ -20,6 +20,7 @@ mod stage0_loader;
 mod type_structure;
 
 mod stage1;
+// mod stage2;
 
 mod pre {
     pub use super::dwarf_parse::*;

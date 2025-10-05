@@ -12,10 +12,10 @@ use super::type_structure::*;
 
 /// Load the type data from DWARF units
 pub fn load(
-    unit: &Unit, 
-    config: Arc<Config>, 
+    unit: &Unit,
+    config: Arc<Config>,
     nsmaps: NamespaceMaps,
-    symbol_list: Arc<SymbolList>
+    symbol_list: Arc<SymbolList>,
 ) -> cu::Result<Stage0> {
     let pointer_type = config.extract.pointer_type()?;
     let mut types = GoffMap::default();
@@ -34,7 +34,8 @@ pub fn load(
     cu::debug!("loaded {} types from {unit}", ctx.types.len());
 
     let mut ctx2 = LoadSymbolCtx {
-        loaded: Default::default(),symbol_list
+        loaded: Default::default(),
+        symbol_list,
     };
     cu::debug!("loading symbols for {unit}");
     cu::check!(load_symbols_root(unit, &mut ctx2), "failed to load symbols for {unit}")?;
@@ -46,7 +47,7 @@ pub fn load(
         types: ctx.types,
         config: ctx.config,
         ns: ctx.nsmaps,
-        symbols: ctx2.loaded
+        symbols: ctx2.loaded,
     })
 }
 fn load_types_root(unit: &Unit, ctx: &mut LoadTypeCtx) -> cu::Result<()> {
@@ -736,57 +737,93 @@ fn load_symbols_recur(mut node: DieNode<'_, '_>, ctx: &mut LoadSymbolCtx) -> cu:
 fn load_data_symbol_at<'a, 'b>(node: DieNode<'a, 'b>, ctx: &mut LoadSymbolCtx) -> cu::Result<DieNode<'a, 'b>> {
     let entry = node.entry();
     let offset = entry.goff();
-    let linkage_name = cu::check!(entry.str_opt(DW_AT_linkage_name), "failed to get linkage name for variable at {offset}")?;
+    let linkage_name = cu::check!(
+        entry.str_opt(DW_AT_linkage_name),
+        "failed to get linkage name for variable at {offset}"
+    )?;
     let Some(linkage_name) = linkage_name else {
         // ignore variables without linkage name
         return Ok(node);
     };
 
-    let loff = cu::check!(entry.loff_opt(DW_AT_type), "failed to get type offset for data symbol at {offset}")?;
+    let loff = cu::check!(
+        entry.loff_opt(DW_AT_type),
+        "failed to get type offset for data symbol at {offset}"
+    )?;
     let loff = match loff {
         Some(l) => l,
         None => {
             // try specification
-            let spec = cu::check!(entry.loff(DW_AT_specification), "failed to get fallback specification for data symbol without type at {offset}")?;
-            let spec = cu::check!(entry.unit().entry_at(spec), "failed to get spec entry for data symbol at {offset}")?;
-            cu::check!(spec.loff(DW_AT_type), "failed to get fallback type offset from spec entry for data symbol at {offset}")?
+            let spec = cu::check!(
+                entry.loff(DW_AT_specification),
+                "failed to get fallback specification for data symbol without type at {offset}"
+            )?;
+            let spec = cu::check!(
+                entry.unit().entry_at(spec),
+                "failed to get spec entry for data symbol at {offset}"
+            )?;
+            cu::check!(
+                spec.loff(DW_AT_type),
+                "failed to get fallback type offset from spec entry for data symbol at {offset}"
+            )?
         }
     };
     let symbol = SymbolInfo::new_data(linkage_name.to_string(), entry.to_global(loff));
-    cu::check!(merge_symbol(linkage_name, symbol,ctx), "failed to merge data symbol at {offset}")?;
+    cu::check!(
+        merge_symbol(linkage_name, symbol, ctx),
+        "failed to merge data symbol at {offset}"
+    )?;
     Ok(node)
 }
 
 fn load_func_symbol_at<'a, 'b>(node: DieNode<'a, 'b>, ctx: &mut LoadSymbolCtx) -> cu::Result<DieNode<'a, 'b>> {
     let entry = node.entry();
     let offset = entry.goff();
-    let is_decl = cu::check!(entry.flag(DW_AT_declaration), "failed to check if function is declaration at {offset}")?;
+    let is_decl = cu::check!(
+        entry.flag(DW_AT_declaration),
+        "failed to check if function is declaration at {offset}"
+    )?;
     if is_decl {
         // skip declaration nodes
         return Ok(node);
     }
-    let linkage_name = cu::check!(load_func_linkage_name(&entry), "failed to get linkage name for function at {offset}")?;
+    let linkage_name = cu::check!(
+        load_func_linkage_name(&entry),
+        "failed to get linkage name for function at {offset}"
+    )?;
     let Some(linkage_name) = linkage_name else {
         // ignore functions without linkage name
         return Ok(node);
     };
     // non-declaration should have low_pc and high_pc, or be inlined
-    let low_pc = cu::check!(entry.uint_opt(DW_AT_low_pc), "failed to get low_pc for function definition at {offset}")?;
+    let low_pc = cu::check!(
+        entry.uint_opt(DW_AT_low_pc),
+        "failed to get low_pc for function definition at {offset}"
+    )?;
     if low_pc.is_none() {
-        let is_inlined = cu::check!(load_func_is_inlined(&entry), "failed to check if function definition is inlined at {offset}")?;
-        cu::ensure!(is_inlined, "function at {offset} is not inlined and does not have low_pc");
+        let is_inlined = cu::check!(
+            load_func_is_inlined(&entry),
+            "failed to check if function definition is inlined at {offset}"
+        )?;
+        cu::ensure!(
+            is_inlined,
+            "function at {offset} is not inlined and does not have low_pc"
+        );
     }
 
     let mut types = vec![];
 
     // return type
-    let retty = cu::check!(load_func_retty(&entry), "failed to get return type for function at {offset}")?;
+    let retty = cu::check!(
+        load_func_retty(&entry),
+        "failed to get return type for function at {offset}"
+    )?;
     let retty = match retty {
         None => Goff::prim(Prim::Void),
-        Some(l) => entry.to_global(l)
+        Some(l) => entry.to_global(l),
     };
     types.push(Tree::Base(retty));
-    
+
     let mut param_names = vec![];
     let mut template_args = vec![];
     let result = entry.for_each_child(|child| {
@@ -801,8 +838,14 @@ fn load_func_symbol_at<'a, 'b>(node: DieNode<'a, 'b>, ctx: &mut LoadSymbolCtx) -
                 )?;
             }
             DW_TAG_formal_parameter => {
-                let name = cu::check!(load_func_param_name(&entry), "failed to get function parameter name at {offset}")?;
-                let ty_loff = cu::check!(load_func_param_type(&entry), "failed to get function parameter type at {offset}")?;
+                let name = cu::check!(
+                    load_func_param_name(&entry),
+                    "failed to get function parameter name at {offset}"
+                )?;
+                let ty_loff = cu::check!(
+                    load_func_param_type(&entry),
+                    "failed to get function parameter type at {offset}"
+                )?;
                 let ty_loff = cu::check!(ty_loff, "missing parameter type at {offset}")?;
                 let ty = entry.to_global(ty_loff);
                 types.push(Tree::Base(ty));
@@ -828,28 +871,52 @@ fn load_func_symbol_at<'a, 'b>(node: DieNode<'a, 'b>, ctx: &mut LoadSymbolCtx) -
     cu::check!(result, "failed to process function body at {offset}")?;
 
     let symbol = SymbolInfo::new_func(linkage_name.clone(), types, param_names, template_args);
-    cu::check!(merge_symbol(&linkage_name, symbol, ctx), "failed to merge function symbol at {offset}")?;
+    cu::check!(
+        merge_symbol(&linkage_name, symbol, ctx),
+        "failed to merge function symbol at {offset}"
+    )?;
     Ok(node)
 }
 
 fn load_func_is_inlined<'a>(entry: &'a Die<'_, '_>) -> cu::Result<bool> {
     let offset = entry.goff();
-    let has_inline_attr = cu::check!(entry.is_inlined(), "failed to check if function entry has DW_AT_inlined at {offset}")?;
+    let has_inline_attr = cu::check!(
+        entry.is_inlined(),
+        "failed to check if function entry has DW_AT_inlined at {offset}"
+    )?;
     if has_inline_attr {
         return Ok(true);
     }
-    let abstract_origin = cu::check!(entry.loff_opt(DW_AT_abstract_origin), "failed to read abstract origin for function at {offset}")?;
+    let abstract_origin = cu::check!(
+        entry.loff_opt(DW_AT_abstract_origin),
+        "failed to read abstract origin for function at {offset}"
+    )?;
     if let Some(abstract_origin) = abstract_origin {
-        let entry = cu::check!(entry.unit().entry_at(abstract_origin), "failed to read abstract origin entry for function at {offset}")?;
-        let has_inline_attr = cu::check!(entry.is_inlined(), "failed to check if function entry has DW_AT_inlined from abstract origin at {offset}")?;
+        let entry = cu::check!(
+            entry.unit().entry_at(abstract_origin),
+            "failed to read abstract origin entry for function at {offset}"
+        )?;
+        let has_inline_attr = cu::check!(
+            entry.is_inlined(),
+            "failed to check if function entry has DW_AT_inlined from abstract origin at {offset}"
+        )?;
         if has_inline_attr {
             return Ok(true);
         }
     }
-    let specification = cu::check!(entry.loff_opt(DW_AT_specification), "failed to read specification for function at {offset}")?;
+    let specification = cu::check!(
+        entry.loff_opt(DW_AT_specification),
+        "failed to read specification for function at {offset}"
+    )?;
     if let Some(specification) = specification {
-        let entry = cu::check!(entry.unit().entry_at(specification), "failed to read specification entry for function at {offset}")?;
-        let has_inline_attr = cu::check!(entry.is_inlined(), "failed to check if function entry has DW_AT_inlined from specification at {offset}")?;
+        let entry = cu::check!(
+            entry.unit().entry_at(specification),
+            "failed to read specification entry for function at {offset}"
+        )?;
+        let has_inline_attr = cu::check!(
+            entry.is_inlined(),
+            "failed to check if function entry has DW_AT_inlined from specification at {offset}"
+        )?;
         if has_inline_attr {
             return Ok(true);
         }
@@ -859,22 +926,43 @@ fn load_func_is_inlined<'a>(entry: &'a Die<'_, '_>) -> cu::Result<bool> {
 
 fn load_func_linkage_name<'a>(entry: &'a Die<'_, '_>) -> cu::Result<Option<String>> {
     let offset = entry.goff();
-    let linkage_name = cu::check!(entry.str_opt(DW_AT_linkage_name), "failed to read linkage name for function at {offset}")?;
+    let linkage_name = cu::check!(
+        entry.str_opt(DW_AT_linkage_name),
+        "failed to read linkage name for function at {offset}"
+    )?;
     if let Some(linkage_name) = linkage_name {
         return Ok(Some(linkage_name.to_string()));
     }
-    let abstract_origin = cu::check!(entry.loff_opt(DW_AT_abstract_origin), "failed to read abstract origin for function at {offset}")?;
+    let abstract_origin = cu::check!(
+        entry.loff_opt(DW_AT_abstract_origin),
+        "failed to read abstract origin for function at {offset}"
+    )?;
     if let Some(abstract_origin) = abstract_origin {
-        let entry = cu::check!(entry.unit().entry_at(abstract_origin), "failed to read abstract origin entry for function at {offset}")?;
-        let name = cu::check!(load_func_linkage_name(&entry), "failed to load linkage_name from abstract origin entry, for function at {offset}")?;
+        let entry = cu::check!(
+            entry.unit().entry_at(abstract_origin),
+            "failed to read abstract origin entry for function at {offset}"
+        )?;
+        let name = cu::check!(
+            load_func_linkage_name(&entry),
+            "failed to load linkage_name from abstract origin entry, for function at {offset}"
+        )?;
         if let Some(name) = name {
             return Ok(Some(name));
         }
     }
-    let specification = cu::check!(entry.loff_opt(DW_AT_specification), "failed to read specification for function at {offset}")?;
+    let specification = cu::check!(
+        entry.loff_opt(DW_AT_specification),
+        "failed to read specification for function at {offset}"
+    )?;
     if let Some(specification) = specification {
-        let entry = cu::check!(entry.unit().entry_at(specification), "failed to read specification entry for function at {offset}")?;
-        let name = cu::check!(load_func_linkage_name(&entry), "failed to load linkage_name from specification entry, for function at {offset}")?;
+        let entry = cu::check!(
+            entry.unit().entry_at(specification),
+            "failed to read specification entry for function at {offset}"
+        )?;
+        let name = cu::check!(
+            load_func_linkage_name(&entry),
+            "failed to load linkage_name from specification entry, for function at {offset}"
+        )?;
         if let Some(name) = name {
             return Ok(Some(name));
         }
@@ -884,22 +972,43 @@ fn load_func_linkage_name<'a>(entry: &'a Die<'_, '_>) -> cu::Result<Option<Strin
 
 fn load_func_retty(entry: &Die<'_, '_>) -> cu::Result<Option<Loff>> {
     let offset = entry.goff();
-    let loff = cu::check!(entry.loff_opt(DW_AT_type), "failed to read type for function entry at {offset}")?;
+    let loff = cu::check!(
+        entry.loff_opt(DW_AT_type),
+        "failed to read type for function entry at {offset}"
+    )?;
     if let Some(loff) = loff {
         return Ok(Some(loff));
     }
-    let abstract_origin = cu::check!(entry.loff_opt(DW_AT_abstract_origin), "failed to read abstract origin for function at {offset}")?;
+    let abstract_origin = cu::check!(
+        entry.loff_opt(DW_AT_abstract_origin),
+        "failed to read abstract origin for function at {offset}"
+    )?;
     if let Some(abstract_origin) = abstract_origin {
-        let entry = cu::check!(entry.unit().entry_at(abstract_origin), "failed to read abstract origin entry for function at {offset}")?;
-        let loff = cu::check!(load_func_retty(&entry), "failed to load retty from abstract origin entry, for function at {offset}")?;
+        let entry = cu::check!(
+            entry.unit().entry_at(abstract_origin),
+            "failed to read abstract origin entry for function at {offset}"
+        )?;
+        let loff = cu::check!(
+            load_func_retty(&entry),
+            "failed to load retty from abstract origin entry, for function at {offset}"
+        )?;
         if let Some(loff) = loff {
             return Ok(Some(loff));
         }
     }
-    let specification = cu::check!(entry.loff_opt(DW_AT_specification), "failed to read specification for function at {offset}")?;
+    let specification = cu::check!(
+        entry.loff_opt(DW_AT_specification),
+        "failed to read specification for function at {offset}"
+    )?;
     if let Some(specification) = specification {
-        let entry = cu::check!(entry.unit().entry_at(specification), "failed to read specification entry for function at {offset}")?;
-        let loff = cu::check!(load_func_retty(&entry), "failed to load retty from specification entry, for function at {offset}")?;
+        let entry = cu::check!(
+            entry.unit().entry_at(specification),
+            "failed to read specification entry for function at {offset}"
+        )?;
+        let loff = cu::check!(
+            load_func_retty(&entry),
+            "failed to load retty from specification entry, for function at {offset}"
+        )?;
         if let Some(loff) = loff {
             return Ok(Some(loff));
         }
@@ -909,22 +1018,43 @@ fn load_func_retty(entry: &Die<'_, '_>) -> cu::Result<Option<Loff>> {
 
 fn load_func_param_name(entry: &Die<'_, '_>) -> cu::Result<Option<String>> {
     let offset = entry.goff();
-    let name = cu::check!(entry.name_opt(), "failed to read name for function param entry at {offset}")?;
+    let name = cu::check!(
+        entry.name_opt(),
+        "failed to read name for function param entry at {offset}"
+    )?;
     if let Some(name) = name {
         return Ok(Some(name.to_string()));
     }
-    let abstract_origin = cu::check!(entry.loff_opt(DW_AT_abstract_origin), "failed to read abstract origin for function at {offset}")?;
+    let abstract_origin = cu::check!(
+        entry.loff_opt(DW_AT_abstract_origin),
+        "failed to read abstract origin for function at {offset}"
+    )?;
     if let Some(abstract_origin) = abstract_origin {
-        let entry = cu::check!(entry.unit().entry_at(abstract_origin), "failed to read abstract origin entry for function at {offset}")?;
-        let name = cu::check!(load_func_param_name(&entry), "failed to load param name from abstract origin entry, for function at {offset}")?;
+        let entry = cu::check!(
+            entry.unit().entry_at(abstract_origin),
+            "failed to read abstract origin entry for function at {offset}"
+        )?;
+        let name = cu::check!(
+            load_func_param_name(&entry),
+            "failed to load param name from abstract origin entry, for function at {offset}"
+        )?;
         if let Some(name) = name {
             return Ok(Some(name));
         }
     }
-    let specification = cu::check!(entry.loff_opt(DW_AT_specification), "failed to read specification for function at {offset}")?;
+    let specification = cu::check!(
+        entry.loff_opt(DW_AT_specification),
+        "failed to read specification for function at {offset}"
+    )?;
     if let Some(specification) = specification {
-        let entry = cu::check!(entry.unit().entry_at(specification), "failed to read specification entry for function at {offset}")?;
-        let name = cu::check!(load_func_param_name(&entry), "failed to load param name from specification entry, for function at {offset}")?;
+        let entry = cu::check!(
+            entry.unit().entry_at(specification),
+            "failed to read specification entry for function at {offset}"
+        )?;
+        let name = cu::check!(
+            load_func_param_name(&entry),
+            "failed to load param name from specification entry, for function at {offset}"
+        )?;
         if let Some(name) = name {
             return Ok(Some(name));
         }
@@ -934,22 +1064,43 @@ fn load_func_param_name(entry: &Die<'_, '_>) -> cu::Result<Option<String>> {
 
 fn load_func_param_type(entry: &Die<'_, '_>) -> cu::Result<Option<Loff>> {
     let offset = entry.goff();
-    let loff = cu::check!(entry.loff_opt(DW_AT_type), "failed to read type for function param entry at {offset}")?;
+    let loff = cu::check!(
+        entry.loff_opt(DW_AT_type),
+        "failed to read type for function param entry at {offset}"
+    )?;
     if let Some(l) = loff {
         return Ok(Some(l));
     }
-    let abstract_origin = cu::check!(entry.loff_opt(DW_AT_abstract_origin), "failed to read abstract origin for function at {offset}")?;
+    let abstract_origin = cu::check!(
+        entry.loff_opt(DW_AT_abstract_origin),
+        "failed to read abstract origin for function at {offset}"
+    )?;
     if let Some(abstract_origin) = abstract_origin {
-        let entry = cu::check!(entry.unit().entry_at(abstract_origin), "failed to read abstract origin entry for function at {offset}")?;
-        let loff = cu::check!(load_func_param_type(&entry), "failed to load param type from abstract origin entry, for function at {offset}")?;
+        let entry = cu::check!(
+            entry.unit().entry_at(abstract_origin),
+            "failed to read abstract origin entry for function at {offset}"
+        )?;
+        let loff = cu::check!(
+            load_func_param_type(&entry),
+            "failed to load param type from abstract origin entry, for function at {offset}"
+        )?;
         if let Some(l) = loff {
             return Ok(Some(l));
         }
     }
-    let specification = cu::check!(entry.loff_opt(DW_AT_specification), "failed to read specification for function at {offset}")?;
+    let specification = cu::check!(
+        entry.loff_opt(DW_AT_specification),
+        "failed to read specification for function at {offset}"
+    )?;
     if let Some(specification) = specification {
-        let entry = cu::check!(entry.unit().entry_at(specification), "failed to read specification entry for function at {offset}")?;
-        let loff = cu::check!(load_func_param_type(&entry), "failed to load param type from specification entry, for function at {offset}")?;
+        let entry = cu::check!(
+            entry.unit().entry_at(specification),
+            "failed to read specification entry for function at {offset}"
+        )?;
+        let loff = cu::check!(
+            load_func_param_type(&entry),
+            "failed to load param type from specification entry, for function at {offset}"
+        )?;
         if let Some(l) = loff {
             return Ok(Some(l));
         }
@@ -962,13 +1113,16 @@ fn merge_symbol(linkage_name: &str, mut symbol: SymbolInfo, ctx: &mut LoadSymbol
         None => {
             let Some(address) = ctx.symbol_list.get_address(linkage_name) else {
                 // ignore symbols that aren't listed
-                return Ok(())
+                return Ok(());
             };
             symbol.address = address;
             ctx.loaded.insert(linkage_name.to_string(), symbol);
         }
         Some(old_symbol) => {
-            cu::check!(old_symbol.merge(&symbol), "failed to merge symbols: old: {old_symbol:#?}, new: {symbol:#?}")?;
+            cu::check!(
+                old_symbol.merge(&symbol),
+                "failed to merge symbols: old: {old_symbol:#?}, new: {symbol:#?}"
+            )?;
             // let old_addr = old_symbol.address;
             // old_symbol.address = 0;
             // cu::ensure!(&symbol == old_symbol, "symbol info mismatch when merging, old: {old_symbol:#?}, new: {symbol:#?}");
@@ -995,6 +1149,4 @@ struct LoadSymbolCtx {
     loaded: BTreeMap<String, SymbolInfo>,
     symbol_list: Arc<SymbolList>,
     // merges: Vec<(Goff, Goff)>,
-
-
 }
