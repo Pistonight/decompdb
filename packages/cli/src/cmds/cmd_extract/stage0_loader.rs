@@ -924,7 +924,8 @@ fn load_func_is_inlined<'a>(entry: &'a Die<'_, '_>) -> cu::Result<bool> {
     Ok(false)
 }
 
-fn load_func_linkage_name<'a>(entry: &'a Die<'_, '_>) -> cu::Result<Option<String>> {
+// TODO - reorganize and remove pub
+pub fn load_func_linkage_name<'a>(entry: &'a Die<'_, '_>) -> cu::Result<Option<String>> {
     let offset = entry.goff();
     let linkage_name = cu::check!(
         entry.str_opt(DW_AT_linkage_name),
@@ -962,6 +963,53 @@ fn load_func_linkage_name<'a>(entry: &'a Die<'_, '_>) -> cu::Result<Option<Strin
         let name = cu::check!(
             load_func_linkage_name(&entry),
             "failed to load linkage_name from specification entry, for function at {offset}"
+        )?;
+        if let Some(name) = name {
+            return Ok(Some(name));
+        }
+    }
+    Ok(None)
+}
+
+// TODO - reorganize and remove pub
+pub fn load_func_name<'a>(entry: &'a Die<'_, '_>) -> cu::Result<Option<String>> {
+    let offset = entry.goff();
+    let simple_name = cu::check!(
+        entry.str_opt(DW_AT_name),
+        "failed to read name for function at {offset}"
+    )?;
+    if let Some(simple_name) = simple_name {
+        return Ok(Some(simple_name.to_string()));
+    }
+    let abstract_origin = cu::check!(
+        entry.loff_opt(DW_AT_abstract_origin),
+        "failed to read abstract origin for function at {offset}"
+    )?;
+    if let Some(abstract_origin) = abstract_origin {
+        let entry = cu::check!(
+            entry.unit().entry_at(abstract_origin),
+            "failed to read abstract origin entry for function at {offset}"
+        )?;
+        let name = cu::check!(
+            load_func_name(&entry),
+            "failed to load name from abstract origin entry, for function at {offset}"
+        )?;
+        if let Some(name) = name {
+            return Ok(Some(name));
+        }
+    }
+    let specification = cu::check!(
+        entry.loff_opt(DW_AT_specification),
+        "failed to read specification for function at {offset}"
+    )?;
+    if let Some(specification) = specification {
+        let entry = cu::check!(
+            entry.unit().entry_at(specification),
+            "failed to read specification entry for function at {offset}"
+        )?;
+        let name = cu::check!(
+            load_func_name(&entry),
+            "failed to load name from specification entry, for function at {offset}"
         )?;
         if let Some(name) = name {
             return Ok(Some(name));

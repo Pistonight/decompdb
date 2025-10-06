@@ -29,7 +29,7 @@ impl<'de> Deserialize<'de> for Regex {
 }
 
 /// Serializable and deserializable shared string
-#[derive(Clone, PartialEq, Eq, Hash, Deref, DerefMut, Display, DebugCustom)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deref, DerefMut, Display, DebugCustom)]
 #[display("{}", self.0)]
 #[debug("{:?}", self.0)]
 #[repr(transparent)]

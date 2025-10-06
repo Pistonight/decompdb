@@ -143,6 +143,44 @@ async fn run_internal(config: Config) -> cu::Result<()> {
         output
     };
 
+    // let stage2 = {
+    //     let bar = cu::progress_bar(stage1.len(), "stage1 -> stage2: merging types");
+    //     // let mut handles = Vec::with_capacity(stage1.len());
+    //     // let pool = cu::co::pool(1);
+    //     let mut output = Vec::with_capacity(stage1.len());
+    //     let mut count = 0;
+    //     let mut type_count = 0;
+    //     for stage in stage1 {
+    //         let stage = super::stage2::run_stage2_parallel(stage)?;
+    //         count += 1;
+    //         type_count += stage.types.len();
+    //         cu::progress!(&bar, count, "{}", stage.name);
+    //         output.push(stage);
+    //     }
+    //
+    //     // for stage in stage1 {
+    //     //     let handle = pool.spawn(async move { super::stage2::run_stage2_parallel(stage) });
+    //     //     handles.push(handle);
+    //     // }
+    //     //
+    //     // let mut set = cu::co::set(handles);
+    //     // let mut count = 0;
+    //     // let mut type_count = 0;
+    //     // while let Some(result) = set.next().await {
+    //     //     let stage = result??;
+    //     //     count += 1;
+    //     //     type_count += stage.types.len();
+    //     //     cu::progress!(&bar, count, "{}", stage.name);
+    //     //     output.push(stage);
+    //     // }
+    //     cu::progress_done!(&bar, "stage2: merged into {type_count} types");
+    //     drop(bar);
+    //     output.sort_unstable_by_key(|x| x.offset);
+    //     output
+    // };
+    //
+    let stage2 = super::stage2::run_stage2_serial(stage1).await?;
+
     cu::hint!("done");
 
     // let stage2 = {

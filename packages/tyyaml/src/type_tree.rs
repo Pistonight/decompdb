@@ -1,7 +1,7 @@
 use cu::pre::*;
 
 /// A Generic Type Tree
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Tree<Repr> {
     /// A basic type
     ///

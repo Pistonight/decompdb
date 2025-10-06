@@ -14,6 +14,28 @@ pub async fn run_stage1(mut stage: Stage0, command: &CompileCommand) -> cu::Resu
     cu::check!(super::flatten_trees(&mut stage), "stage1: flatten_trees failed")?;
     let mut names = cu::check!(super::parse_names(&stage, command).await, "stage1: parse_names failed")?;
 
+    // GC types to ensure trees are all GC-ed
+    // note GC must be after parsing names, since some types could be referenced
+    // only in namespaces, and we only get it after parsing the string type name
+    let mut marked = GoffSet::default();
+    for symbol in stage.symbols.values() {
+        symbol.mark(&mut marked);
+    }
+    // also mark the parsed name
+    for name in names.values() {
+        name.mark(&mut marked);
+    }
+    super::super::garbage_collector::mark_and_sweep(marked, &mut stage.types, |t, k, marked| {
+        t.mark(k, marked);
+    });
+    if cfg!(debug_assertions) {
+        for (k, t) in &stage.types {
+            if let Type0::Tree(t) = t {
+                cu::bail!("unexpected tree type not gc'ed: k={k}, type={t:#?}");
+            }
+        }
+    }
+
     // build stage1 types
     let mut types = GoffMap::default();
     let mut typedef_names = GoffMap::<Vec<_>>::default();
@@ -81,6 +103,7 @@ pub async fn run_stage1(mut stage: Stage0, command: &CompileCommand) -> cu::Resu
             }
         }
     }
+
     // fill in typedef names
     for (k, names) in typedef_names {
         match types.get_mut(&k).unwrap() {
@@ -98,13 +121,10 @@ pub async fn run_stage1(mut stage: Stage0, command: &CompileCommand) -> cu::Resu
     for (k, g) in dupes {
         types.insert(k, types.get(&g).unwrap().clone());
     }
-    let deduped = super::super::deduper::dedupe(types, GoffBuckets::default(), &mut stage.symbols, |data, buckets| {
+    let deduped = super::super::deduper::dedupe(types, GoffBuckets::default(), &mut stage.symbols, None, |data, buckets| {
         data.map_goff(|k| Ok(buckets.primary_fallback(k)))
     });
-    let deduped = cu::check!(deduped, "clean_typedefs: deduped failed")?;
-    if stage.name.contains("PauseMenuDataMgr") {
-        cu::print!("{:#?}", deduped);
-    }
+    let deduped = cu::check!(deduped, "stage1: final deduped failed")?;
 
     Ok(Stage1 {
         offset: stage.offset,

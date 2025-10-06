@@ -128,29 +128,16 @@ pub fn flatten_trees(stage: &mut Stage0) -> cu::Result<()> {
     }
     stage.symbols.extend(changes);
 
-    // GC types to ensure trees are all GC-ed
-    let mut marked = GoffSet::default();
-    for symbol in stage.symbols.values() {
-        symbol.mark(&mut marked);
-    }
-    super::super::garbage_collector::mark_and_sweep(marked, &mut stage.types, Type0::mark);
-    if cfg!(debug_assertions) {
-        for (k, t) in &stage.types {
-            if let Type0::Tree(t) = t {
-                cu::bail!("unexpected tree type not gc'ed: k={k}, type={t:#?}");
-            }
-        }
-    }
-
     let deduped = deduper::dedupe(
         std::mem::take(&mut stage.types),
         GoffBuckets::default(),
         &mut stage.symbols,
+        Some(&mut stage.ns),
         |data, buckets| data.map_goff(|k| Ok(buckets.primary_fallback(k))),
     );
     let deduped = cu::check!(deduped, "flatten_trees: deduped failed")?;
-
     stage.types = deduped;
+
     Ok(())
 }
 

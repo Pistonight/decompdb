@@ -20,7 +20,7 @@ mod stage0_loader;
 mod type_structure;
 
 mod stage1;
-// mod stage2;
+mod stage2;
 
 mod pre {
     pub use super::dwarf_parse::*;

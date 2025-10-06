@@ -13,6 +13,7 @@ pub fn dedupe<T: Eq + Hash, F: Fn(&mut T, &GoffBuckets) -> cu::Result<()>>(
     mut map: GoffMap<T>,
     mut buckets: GoffBuckets,
     symbols: &mut BTreeMap<String, SymbolInfo>,
+    namespace: Option<&mut NamespaceMaps>,
     mapper: F,
 ) -> cu::Result<GoffMap<T>> {
     loop {
@@ -79,6 +80,18 @@ pub fn dedupe<T: Eq + Hash, F: Fn(&mut T, &GoffBuckets) -> cu::Result<()>>(
         let f: GoffMapFn = Box::new(|k| Ok(buckets.primary_fallback(k)));
         for symbol in symbols.values_mut() {
             cu::check!(symbol.map_goff(&f), "symbol mapping failed when deduping")?;
+        }
+
+        if let Some(ns) = namespace {
+            for n in ns.qualifiers.values_mut() {
+                cu::check!(n.map_goff(&f), "qualifier mapping failed when deduping")?;
+            }
+            for n in ns.namespaces.values_mut() {
+                cu::check!(n.map_goff(&f), "namespace mapping failed when deduping")?;
+            }
+            for n in ns.by_src.values_mut() {
+                cu::check!(n.map_goff(&f), "namespace by_src mapping failed when deduping")?;
+            }
         }
 
         return Ok(map);

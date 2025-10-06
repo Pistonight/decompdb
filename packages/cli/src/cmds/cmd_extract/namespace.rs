@@ -94,7 +94,18 @@ fn load_namespace_recur(node: DieNode<'_, '_>, ctx: &mut LoadNamespaceCtx) -> cu
             // types could be defined inside a function
             DW_TAG_subprogram => {
                 ctx.register_current_at_offset(offset);
-                ctx.current_qualifier.push(NameSeg::Subprogram(offset));
+                let linkage_name = super::stage0_loader::load_func_linkage_name(&entry)?;
+                match linkage_name {
+                    Some(n) => ctx.current_qualifier.push(NameSeg::Subprogram(offset, n.as_str().into(), true)),
+                    None => {
+                        let name = super::stage0_loader::load_func_name(&entry)?;
+                        let name = match name {
+                            Some(name) => name,
+                            None => "anonymous".to_string()
+                        };
+                        ctx.current_qualifier.push(NameSeg::Subprogram(offset, name.as_str().into(), false));
+                    }
+                }
                 node.for_each_child(|child| load_namespace_recur(child, ctx))?;
                 ctx.current_qualifier.pop();
             }
@@ -107,7 +118,6 @@ fn load_namespace_recur(node: DieNode<'_, '_>, ctx: &mut LoadNamespaceCtx) -> cu
                         ctx.current_namespace.push(seg);
                     }
                     None => {
-                        // let id = ANONYMOUS_COUNT.fetch_add(1, Ordering::SeqCst);
                         ctx.current_qualifier.push(NameSeg::Anonymous);
                         ctx.current_namespace.push(NameSeg::Anonymous);
                     }
@@ -160,7 +170,7 @@ impl Die<'_, '_> {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, DebugCustom, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, DebugCustom, Serialize, Deserialize)]
 #[debug("{}", self)]
 pub struct NamespacedName(Namespace, ArcStr);
 impl NamespacedName {
@@ -201,6 +211,12 @@ impl NamespacedName {
     pub fn map_goff(&mut self, f: &GoffMapFn) -> cu::Result<()> {
         cu::check!(self.0.map_goff(f), "failed to map namespaced name")
     }
+
+    /// Mark referenced types for GC
+    pub fn mark(&self, marked: &mut GoffSet) {
+        self.0.mark(marked);
+    }
+
     pub fn permutated_string_reprs(&self, permutater: &mut StructuredNamePermutater) -> cu::Result<BTreeSet<String>> {
         if self.0.is_empty() {
             return Ok(std::iter::once(self.basename().to_string()).collect());
@@ -211,7 +227,7 @@ impl NamespacedName {
     }
 }
 
-#[derive(Default, Clone, PartialEq, Eq, Hash, DebugCustom, Serialize, Deserialize)]
+#[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, DebugCustom, Serialize, Deserialize)]
 #[debug("{}", self)]
 pub struct Namespace(Vec<NameSeg>);
 impl Namespace {
@@ -257,32 +273,42 @@ impl Namespace {
         }
         Ok(())
     }
+    /// Mark referenced types for GC
+    pub fn mark(&self, marked: &mut GoffSet) {
+        for seg in &self.0 {
+            seg.mark(marked);
+        }
+    }
     pub fn permutated_string_reprs(&self, permutater: &mut StructuredNamePermutater) -> cu::Result<BTreeSet<String>> {
         let mut output = BTreeSet::new();
         for n in &self.0 {
-            let seg_names = cu::check!(
-                n.permutated_string_reprs(permutater),
-                "permutated_string_reprs failed for namespace {self}"
-            )?;
-            match (output.is_empty(), seg_names.is_empty()) {
-                (true, _) => output = seg_names,
-                (false, true) => {}
-                (false, false) => {
-                    // permutate
-                    let old = std::mem::take(&mut output);
-                    for name in seg_names {
-                        for prev in &old {
-                            output.insert(format!("{prev}::{name}"));
-                        }
+            match n {
+                NameSeg::Name(s) => {
+                    if output.is_empty() {
+                        output = std::iter::once(s.to_string()).collect();
+                    } else {
+                        output = output.into_iter().map(|x| format!("{x}::{s}")).collect();
                     }
                 }
+                NameSeg::Type(k, _) => {
+                    // the type repr contains the namespace, so we can discard the previous
+                    output = permutater.permutated_string_reprs_goff(*k)?;
+                }
+                NameSeg::Subprogram(_, name, is_linkage_name) => {
+                    if *is_linkage_name {
+                        output = std::iter::once(name.to_string()).collect();
+                    } else {
+                        output = output.into_iter().map(|x| format!("{x}::(function {name})")).collect();
+                    }
+                }
+                NameSeg::Anonymous => {}
             }
         }
         Ok(output)
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Display, DebugCustom, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Display, DebugCustom, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum NameSeg {
     #[display("{}", _0)]
@@ -295,7 +321,7 @@ pub enum NameSeg {
 
     #[display("[subprogram={}]", _0)]
     #[debug("[subprogram={}]", _0)]
-    Subprogram(Goff),
+    Subprogram(Goff, ArcStr, bool /* is_linkage_name */),
 
     #[display("[anonymous]")]
     #[debug("[anonymous]")]
@@ -307,7 +333,7 @@ impl NameSeg {
         match self {
             NameSeg::Name(s) => Ok(Some(s.as_ref())),
             NameSeg::Type(_, s) => Ok(Some(s.as_ref())),
-            NameSeg::Subprogram(_) => {
+            NameSeg::Subprogram(_, _, _) => {
                 cu::bail!("to_cpp_source does not support subprogram as namespace");
             }
             NameSeg::Anonymous => Ok(None),
@@ -317,7 +343,7 @@ impl NameSeg {
         match (self, other) {
             (NameSeg::Name(a), NameSeg::Name(b)) => a == b,
             (NameSeg::Type(_, a), NameSeg::Type(_, b)) => a == b,
-            (NameSeg::Subprogram(a), NameSeg::Subprogram(b)) => a == b,
+            (NameSeg::Subprogram(a, _, _), NameSeg::Subprogram(b, _, _)) => a == b,
             (NameSeg::Anonymous, NameSeg::Anonymous) => true,
             _ => false,
         }
@@ -327,21 +353,17 @@ impl NameSeg {
             Self::Type(goff, _) => {
                 *goff = cu::check!(f(*goff), "failed to map type in namespace")?;
             }
-            Self::Subprogram(goff) => {
+            Self::Subprogram(goff, _, _) => {
                 *goff = cu::check!(f(*goff), "failed to map subprogram in namespace")?;
             }
             _ => {}
         }
         Ok(())
     }
-    pub fn permutated_string_reprs(&self, permutator: &mut StructuredNamePermutater) -> cu::Result<BTreeSet<String>> {
-        match self {
-            Self::Name(s) => Ok(std::iter::once(s.to_string()).collect()),
-            Self::Type(k, _) => permutator.permutated_string_reprs_goff(*k),
-            Self::Subprogram(_) => {
-                cu::bail!("permutated_string_reprs does not support subprogram as namespace")
-            }
-            Self::Anonymous => Ok(BTreeSet::new()),
+    /// Mark referenced types for GC
+    pub fn mark(&self, marked: &mut GoffSet) {
+        if let NameSeg::Type(goff, _) = self {
+            marked.insert(*goff);
         }
     }
 }
