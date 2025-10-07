@@ -173,6 +173,9 @@ impl Type1 {
 
     /// Create a merged type data
     pub fn get_merged(&self, other: &Self) -> cu::Result<Self> {
+        fn select_name(a: &Option<NamespacedName>, b: &Option<NamespacedName>) -> Option<NamespacedName> {
+            a.as_ref().or_else(|| b.as_ref()).cloned()
+        }
         match (self, other) {
             (Type1::Prim(a), Type1::Prim(b)) => {
                 cu::ensure!(a == b);
@@ -187,7 +190,8 @@ impl Type1 {
                 let mut other_names = BTreeSet::new();
                 other_names.extend(other_names_a.clone());
                 other_names.extend(other_names_b.clone());
-                Ok(Type1::Enum(name_a.clone(), a.clone(), other_names.into_iter().collect()))
+                let name = select_name(name_a, name_b);
+                Ok(Type1::Enum(name, a.clone(), other_names.into_iter().collect()))
             }
             (Type1::Enum(name, data, other_names_a), Type1::EnumDecl(name_b, other_names_b))  |
             (Type1::EnumDecl(name_b, other_names_b), Type1::Enum(name, data, other_names_a)) 
@@ -221,7 +225,8 @@ impl Type1 {
                 other_names.extend(other_names_a.clone());
                 other_names.extend(other_names_b.clone());
                 let data = cu::check!(a.get_merged(b), "failed to get merged struct data")?;
-                Ok(Type1::Struct(name_a.clone(), data, other_names.into_iter().collect()))
+                let name = select_name(name_a, name_b);
+                Ok(Type1::Struct(name, data, other_names.into_iter().collect()))
             }
             (Type1::Struct(name, data, other_names_a), Type1::StructDecl(name_b, other_names_b))  |
             (Type1::StructDecl(name_b, other_names_b), Type1::Struct(name, data, other_names_a)) 
@@ -254,7 +259,8 @@ impl Type1 {
                 let mut other_names = BTreeSet::new();
                 other_names.extend(other_names_a.clone());
                 other_names.extend(other_names_b.clone());
-                Ok(Type1::Union(name_a.clone(), a.clone(), other_names.into_iter().collect()))
+                let name = select_name(name_a, name_b);
+                Ok(Type1::Union(name, a.clone(), other_names.into_iter().collect()))
             }
             (Type1::Union(name, data, other_names_a), Type1::UnionDecl(name_b, other_names_b))  |
             (Type1::UnionDecl(name_b, other_names_b), Type1::Union(name, data, other_names_a)) 
@@ -963,10 +969,7 @@ pub struct NamespacedTemplatedName {
 }
 impl NamespacedTemplatedName {
     pub fn new(base: NamespacedName) -> Self {
-        Self {
-            base,
-            templates: vec![],
-        }
+        Self::with_templates(base, vec![])
     }
     pub fn with_templates(base: NamespacedName, templates: Vec<TemplateArg<Self>>) -> Self {
         Self { base, templates }

@@ -131,8 +131,9 @@ pub fn merge_by_name(stage: &mut Stage1) -> cu::Result<()> {
                 let (k1, k2) = orphan_dep.to_pair();
                 let k1_names = permutater.structured_names(k1);
                 let k2_names = permutater.structured_names(k2);
-                // both are anonymous, qualified for merging
-                if k1_names.is_empty() && k2_names.is_empty() {
+                // one is anonymous, qualified for merging
+                // (sometimes a typedef or using is only there in some CU but not others)
+                if k1_names.is_empty() || k2_names.is_empty() {
                     let mut task = MergeTask::new(k1, k2);
                     let t1 = stage.types.get(&k1).unwrap();
                     let t2 = stage.types.get(&k2).unwrap();
@@ -152,6 +153,27 @@ pub fn merge_by_name(stage: &mut Stage1) -> cu::Result<()> {
                     error_string += &format!("  b: {k2} names={:#?}\n", permutater.structured_names(k2));
                     error_string += &format!("  a perm={:#?}\n", permutater.permutated_string_reprs_goff(k1)?);
                     error_string += &format!("  b perm={:#?}\n", permutater.permutated_string_reprs_goff(k2)?);
+                    let mut dep_chain = vec![];
+                    let mut current = pair;
+                    loop {
+                        let mut found = vec![];
+                        for (key, deps) in &depmap {
+                            if !deps.contains(&current) {
+                                continue;
+                            }
+                            found.push(*key);
+                        }
+                        if found.is_empty() {
+                            break;
+                        }
+                        current = found[0];
+                        let more_than_one = found.len() > 1;
+                        dep_chain.push(found);
+                        if more_than_one {
+                            break;
+                        }
+                    }
+                    error_string += &format!("  dep stack: {dep_chain:#?}");
                 }
                 cu::bail!("{error_string}\n{len} orphan deps found");
             }
@@ -234,10 +256,12 @@ pub fn merge_by_name(stage: &mut Stage1) -> cu::Result<()> {
         cu::bail!("not all merges were completed! remaining: {merge_tasks:#?}");
     }
 
-    let deduped = deduper::dedupe(std::mem::take(&mut stage.types), 
+    let deduped = deduper::dedupe_with_merger(std::mem::take(&mut stage.types), 
         buckets, &mut stage.symbols, None, |data, buckets| {
         data.map_goff(|k| Ok(buckets.primary_fallback(k)))
-    });
+    }, |t1, t2| {
+            t1.get_merged(t2)
+        });
     let deduped = cu::check!(deduped, "merge_by_name: dedupe failed")?;
     stage.types = deduped;
 
