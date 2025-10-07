@@ -221,7 +221,6 @@ impl NamespacedName {
         if self.0.is_empty() {
             return Ok(std::iter::once(self.basename().to_string()).collect());
         }
-
         let namespaces = self.0.permutated_string_reprs(permutater)?;
         Ok(namespaces.into_iter().map(|x| format!("{x}::{}", self.1)).collect())
     }
@@ -293,6 +292,11 @@ impl Namespace {
                 NameSeg::Type(k, _) => {
                     // the type repr contains the namespace, so we can discard the previous
                     output = permutater.permutated_string_reprs_goff(*k)?;
+                    // if the type returns empty names, it means the type is being resolved
+                    // recursively, so we discard this name by returning empty
+                    if output.is_empty() {
+                        return Ok(output);
+                    }
                 }
                 NameSeg::Subprogram(_, name, is_linkage_name) => {
                     if *is_linkage_name {

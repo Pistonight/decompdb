@@ -9,12 +9,14 @@ use super::pre::*;
 use super::type_structure::*;
 
 /// Dedupe goffs that map to the same type data
-pub fn dedupe<T: Eq + Hash, F: Fn(&mut T, &GoffBuckets) -> cu::Result<()>>(
+pub fn dedupe<
+T: Eq + Hash + std::fmt::Debug, F: Fn(&mut T, &GoffBuckets) -> cu::Result<()>>(
     mut map: GoffMap<T>,
     mut buckets: GoffBuckets,
     symbols: &mut BTreeMap<String, SymbolInfo>,
     namespace: Option<&mut NamespaceMaps>,
     mapper: F,
+    merger:
 ) -> cu::Result<GoffMap<T>> {
     loop {
         // must run mapper first to make sure collision and merge check
@@ -32,7 +34,8 @@ pub fn dedupe<T: Eq + Hash, F: Fn(&mut T, &GoffBuckets) -> cu::Result<()>>(
                 Entry::Occupied(e) => {
                     cu::ensure!(
                         e.get() == &t,
-                        "failed to merge {goff} into {k}: the data are not equal after mapping, please check the mapper implementation"
+                        "failed to merge {goff} into {k}: the data are not equal after mapping, please check the mapper implementation.\na={:#?}, b={:#?}",
+                        e.get(), t
                     );
                 }
                 Entry::Vacant(e) => {

@@ -606,7 +606,7 @@ impl Type0Struct {
 
     /// Add merge dependencies if self and other are compatible for merging, return an error if not compatible
     pub fn add_merge_deps(&self, other: &Self, task: &mut MergeTask) -> cu::Result<()> {
-        cu::ensure!(self.byte_size == other.byte_size, "structs of different sizes cannot be merged");
+        cu::ensure!(self.byte_size == other.byte_size, "structs of different sizes cannot be merged (0x{:x} != 0x{:x})", self.byte_size, other.byte_size);
         cu::ensure!(self.template_args.len() == other.template_args.len(), "structs of different template arg count cannot be merged");
         for (a,b) in std::iter::zip(&self.template_args, &other.template_args) {
             cu::check!(a.add_merge_deps(b, task), "add_merge_deps failed for struct template args")?;
@@ -618,15 +618,15 @@ impl Type0Struct {
                 if let Some((_, other_entry)) = other.vtable.iter().find(|(_, e)| e.is_dtor()) {
                     cu::check!(
                         entry.add_merge_deps(other_entry, task),
-                        "add_merge_deps failed for vtable dtor entry"
+                        "add_merge_deps failed for vtable dtor entry, {entry:#?}"
                     )?;
                 }
                 continue;
             }
-            if let Some((_, other_entry)) = other.vtable.iter().find(|(x, _)| x == i) {
+            if let Some((_, other_entry)) = other.vtable.iter().find(|(x, oe)| !oe.is_dtor() && x == i) {
                 cu::check!(
                     entry.add_merge_deps(other_entry, task),
-                    "add_merge_deps failed for vtable entry"
+                    "add_merge_deps failed for vtable entry i={i}, a={entry:#?}, b={other_entry:#?}"
                 )?;
             }
         }
@@ -657,7 +657,7 @@ impl Type0Struct {
                 }
                 continue;
             }
-            if let Some((_, self_entry)) = self.vtable.iter().find(|(j, _)| i == j) {
+            if let Some((_, self_entry)) = self.vtable.iter().find(|(j, se)| !se.is_dtor() && i == j) {
                 cu::ensure!(
                     other_entry.name == self_entry.name,
                     "cannot merge vtable entries of different names, at index {i}: {:?} and {:?}",
@@ -865,6 +865,7 @@ pub enum SpecialMember {
 pub struct StructuredNamePermutater {
     names: GoffMap<Vec<StructuredName>>,
     cache: GoffMap<BTreeSet<String>>,
+    // stack: Vec<Goff>,
 }
 
 impl StructuredNamePermutater {
@@ -872,11 +873,20 @@ impl StructuredNamePermutater {
         Self {
             names,
             cache: Default::default(),
+            // stack: Default::default(),
         }
+    }
+    pub fn structured_names(&self, goff: Goff) -> &[StructuredName] {
+        self.names.get(&goff).unwrap()
     }
     pub fn permutated_string_reprs_goff(&mut self, goff: Goff) -> cu::Result<BTreeSet<String>> {
         if let Some(x) = self.cache.get(&goff) {
             return Ok(x.clone());
+        }
+        let mut output = BTreeSet::new();
+        let names = cu::check!(self.names.get(&goff), "did not resolve structured name for type {goff}")?.clone();
+        if names.is_empty() {
+            return Ok(output);
         }
         // insert empty set into the map, since there can be self-referencing names
         // for example
@@ -884,10 +894,15 @@ impl StructuredNamePermutater {
         // using SelfType = Foo;
         // };
         self.cache.insert(goff, Default::default());
-        let mut output = BTreeSet::new();
-        let names = cu::check!(self.names.get(&goff), "did not resolve structured name for type {goff}")?.clone();
-        for n in names {
-            output.extend(n.permutated_string_reprs(self)?);
+        for n in &names {
+            let permutated = n.permutated_string_reprs(self)?;
+            output.extend(permutated);
+        }
+        if output.is_empty() {
+            // do not cache and discard this attempt if empty
+            // cu::bail!("empty name permutation: names={names:#?}");
+            self.cache.remove(&goff);
+            return Ok(output);
         }
         self.cache.insert(goff, output.clone());
 
@@ -923,13 +938,16 @@ impl StructuredName {
                     )?;
                     template_names.push(n);
                 }
-                let template_names = permute(&template_names);
+                let template_name_perms = permute(&template_names);
                 let mut output = BTreeSet::new();
-                for base in base_names {
-                    for templates in &template_names {
+                for base in &base_names {
+                    for templates in &template_name_perms {
                         output.insert(format!("{base}<{}>", templates.join(", ")));
                     }
                 }
+                // if !base_names.is_empty() && output.is_empty() {
+                //     cu::bail!("template permutation failed: name={self:#?}, template_names={template_names:#?}, perms={template_name_perms:#?}")
+                // }
                 Ok(output)
             }
         }
@@ -1048,7 +1066,9 @@ impl TemplateArg<Goff> {
     pub fn permutated_string_reprs(&self, permutater: &mut StructuredNamePermutater) -> cu::Result<BTreeSet<String>> {
         match self {
             TemplateArg::Const(x) => Ok(std::iter::once(x.to_string()).collect()),
-            TemplateArg::Type(tree) => tree_goff_permutated_string_reprs(tree, permutater),
+            TemplateArg::Type(tree) => {
+                tree_goff_permutated_string_reprs(tree, permutater)
+            }
             TemplateArg::StaticConst => Ok(std::iter::once("[static]".to_string()).collect()),
         }
     }
@@ -1104,7 +1124,9 @@ fn tree_goff_permutated_string_reprs(
     permutater: &mut StructuredNamePermutater,
 ) -> cu::Result<BTreeSet<String>> {
     match tree {
-        Tree::Base(k) => permutater.permutated_string_reprs_goff(*k),
+        Tree::Base(k) => {
+            permutater.permutated_string_reprs_goff(*k)
+        }
         Tree::Array(base, len) => {
             let base_names = cu::check!(
                 tree_goff_permutated_string_reprs(base, permutater),
@@ -1294,17 +1316,22 @@ fn tree_name_permutated_string_reprs(
 }
 
 fn permute(input: &[BTreeSet<String>]) -> Vec<Vec<String>> {
-    if input.is_empty() {
-        return vec![];
-    }
-    let recur_output = permute(&input[..input.len() - 1]);
-    let mut output = Vec::with_capacity(recur_output.len() * input.len());
-    for last in input.last().unwrap() {
-        for prev in &recur_output {
-            output.push(prev.iter().cloned().chain(std::iter::once(last.clone())).collect());
+    match input.len() {
+        0 => vec![],
+        1 => {
+            input[0].iter().map(|x| vec![x.to_string()]).collect()
+        }
+        len => {
+            let recur_output = permute(&input[..len - 1]);
+            let mut output = Vec::with_capacity(recur_output.len() * len);
+            for last in input.last().unwrap() {
+                for prev in &recur_output {
+                    output.push(prev.iter().cloned().chain(std::iter::once(last.clone())).collect());
+                }
+            }
+            output
         }
     }
-    output
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1440,51 +1467,55 @@ impl SymbolInfo {
 /// After merging all deps, the merge can happen
 #[derive(Debug)]
 pub struct MergeTask {
-    deps: Vec<(Goff, Goff)>,
-    merge: (Goff, Goff)
+    deps: Vec<GoffPair>,
+    merge: GoffPair
 }
 impl MergeTask {
     pub fn new(k1: Goff, k2: Goff) -> Self {
-        let a = k1.min(k2);
-        let b = k1.max(k2);
         Self {
-            deps: vec![],merge: (a,b)
+            deps: vec![],merge: (k1, k2).into()
         }
     }
     pub fn add_dep(&mut self, k1: Goff, k2: Goff) {
-        if k1 == k2 || self.merge == (k1, k2) || self.merge == (k2, k1) {
+        if k1 == k2 || self.merge == (k1, k2).into() {
             // dep trivially satisfied
             return;
         }
-        self.deps.push((k1, k2))
-    }
-    pub fn find_circular_deps(
-        &self, 
-        map: &BTreeMap<(Goff, Goff), MergeTask>,
-        seen: &mut BTreeSet<(Goff, Goff)>,
-        out: &mut Vec<(Goff, Goff)>
-    ) {
-        seen.()
-        for (a, b) in &self.deps {
-            if seen.contains(&(*a, *b)) || seen.contains(&(*b, *a)) {
-                out.push((*a, *b));
-            }
-        }
-        if !out.is_empty() {
-            return;
-        }
-        
+        self.deps.push((k1, k2).into())
     }
     /// Update dependencies. Remove the deps that are satisfied. Return true
     /// if the deps are all satisfied and ready to merge
     pub fn update_deps(&mut self, buckets: &GoffBuckets) -> bool {
-        self.deps.retain(|(k1, k2)| {
-            buckets.primary_fallback(*k1) != buckets.primary_fallback(*k2)
+        self.deps.retain(|pair| {
+            let (k1, k2) = pair.to_pair();
+            buckets.primary_fallback(k1) != buckets.primary_fallback(k2)
         });
+        // let entry = dep_sets.entry(self.merge_pair()).or_default();
+        // for 
         self.deps.is_empty()
     }
-    pub fn merge_pair(&self) -> (Goff, Goff) {
-        self.merge
+
+    pub fn remove_deps(&mut self, depmap: &BTreeMap<GoffPair, BTreeSet<GoffPair>>) {
+        if let Some(to_remove) = depmap.get(&self.merge) {
+            self.deps.retain(|pair| {
+                !to_remove.contains(pair)
+            });
+        }
+    }
+
+    /// Add the dependencies to a dependency map
+    pub fn track_deps(&self, depmap: &mut BTreeMap<GoffPair, BTreeSet<GoffPair>>) {
+        depmap.entry(self.merge).or_default().extend(self.deps.iter().copied())
+    }
+    /// Execute the merge
+    pub fn execute(&self, types: &mut GoffMap<Type1>, buckets: &mut GoffBuckets) -> cu::Result<()> {
+        let (k1, k2) = self.merge.to_pair();
+        let t1 = types.get(&k1).unwrap();
+        let t2 = types.get(&k2).unwrap();
+        let merged = cu::check!(t1.get_merged(t2), "failed to merge types {k1} and {k2}")?;
+        types.insert(k1, merged.clone());
+        types.insert(k2, merged);
+        cu::check!(buckets.merge(k1, k2), "failed to merge {k1} and {k2} in buckets")
     }
 }
 fn tree_add_merge_deps(a: &Tree<Goff>, b: &Tree<Goff>, task: &mut MergeTask) -> cu::Result<()> {

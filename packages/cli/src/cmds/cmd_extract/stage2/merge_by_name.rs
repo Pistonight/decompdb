@@ -79,38 +79,86 @@ pub fn merge_by_name(stage: &mut Stage1) -> cu::Result<()> {
         }
     }
 
-// {
-//         for k in name2goffs_struct.keys() {
-//             if k.contains("PauseMenuDataMgr") {
-//                 cu::print!("{k}");
-//             }
-//         }
-//         let x = name2goffs_struct.get("uking::ui::PauseMenuDataMgr");
-//         if let Some(x) = x {
-//             cu::print!("PMDM: {x:?}");
-//         }
-//     }
-
-    let mut to_merge = BTreeSet::new();
-    for goffs in name2goffs_enum.values()
-        .chain(name2goffs_union.values())
-        .chain(name2goffs_struct.values())
-    {
-        let v = goffs.iter().copied().collect::<Vec<_>>();
-        for (i, k1) in v.iter().copied().enumerate() {
-            for k2 in v.iter().skip(i+1).copied() {
-                to_merge.insert((k1, k2));
+    let mut merge_tasks = {
+        let mut to_merge = vec![];
+        for (merging_name, goffs) in name2goffs_enum.iter()
+            .chain(name2goffs_union.iter())
+            .chain(name2goffs_struct.iter())
+        {
+            let v = goffs.iter().copied().collect::<Vec<_>>();
+            for (i, k1) in v.iter().copied().enumerate() {
+                for k2 in v.iter().skip(i+1).copied() {
+                    to_merge.push((k1, k2, merging_name));
+                }
             }
         }
-    }
-    let mut merge_tasks = vec![];
-    for (k1, k2) in to_merge {
-        let mut task = MergeTask::new(k1, k2);
-        let t1 = stage.types.get(&k1).unwrap();
-        let t2 = stage.types.get(&k2).unwrap();
-        cu::check!(t1.add_merge_deps(t2, &mut task), "failed to add merge deps for {k1} and {k2}")?;
-        merge_tasks.push(task);
-    }
+        let mut merge_tasks = BTreeMap::default();
+        for (k1, k2, merging_name) in to_merge {
+            let key = GoffPair::from((k1, k2));
+            if merge_tasks.contains_key(&key) {
+                continue;
+            }
+            let mut task = MergeTask::new(k1, k2);
+            let t1 = stage.types.get(&k1).unwrap();
+            let t2 = stage.types.get(&k2).unwrap();
+            if let Err(e) = t1.add_merge_deps(t2, &mut task) {
+                let k1_names = permutater.structured_names(k1);
+                let k2_names = permutater.structured_names(k2);
+                cu::rethrow!(e, "failed to add merge deps for {k1} and {k2}\n- merging_name={merging_name}, k1_names={k1_names:#?}, k2_names={k2_names:#?}");
+            }
+            merge_tasks.insert(key, task);
+        }
+        // detect orphan deps (deps that aren't in merge tasks), and merge them if possible
+        // orphan deps can happen if a type is anonymous and does not have a typedef,
+        // for example, an anonymous member
+        // struct Foo {
+        //     union {
+        //          int a;
+        //          float b;
+        //     };
+        // };
+        let mut changed = true;
+        while changed {
+            changed = false;
+            let mut depmap = BTreeMap::default();
+            for task in merge_tasks.values() {
+                task.track_deps(&mut depmap);
+            }
+            let all_deps = depmap.values().flatten().copied().collect::<BTreeSet<_>>();
+            let keys = depmap.keys().copied().collect();
+            let mut real_orphan_deps = BTreeSet::default();
+            for orphan_dep in all_deps.difference(&keys) {
+                let (k1, k2) = orphan_dep.to_pair();
+                let k1_names = permutater.structured_names(k1);
+                let k2_names = permutater.structured_names(k2);
+                // both are anonymous, qualified for merging
+                if k1_names.is_empty() && k2_names.is_empty() {
+                    let mut task = MergeTask::new(k1, k2);
+                    let t1 = stage.types.get(&k1).unwrap();
+                    let t2 = stage.types.get(&k2).unwrap();
+                    cu::check!(t1.add_merge_deps(t2, &mut task), "failed to add merge deps (from orphan deps) for {k1} and {k2}")?;
+                    merge_tasks.insert((k1, k2).into(), task);
+                    changed = true;
+                    continue;
+                }
+                real_orphan_deps.insert(*orphan_dep);
+            }
+            if !real_orphan_deps.is_empty() {
+                let len = real_orphan_deps.len();
+                let mut error_string = "orphan deps found:\n".to_string();
+                for pair in real_orphan_deps {
+                    let (k1, k2) = pair.to_pair();
+                    error_string += &format!("- a: {k1} names={:#?}\n", permutater.structured_names(k1));
+                    error_string += &format!("  b: {k2} names={:#?}\n", permutater.structured_names(k2));
+                    error_string += &format!("  a perm={:#?}\n", permutater.permutated_string_reprs_goff(k1)?);
+                    error_string += &format!("  b perm={:#?}\n", permutater.permutated_string_reprs_goff(k2)?);
+                }
+                cu::bail!("{error_string}\n{len} orphan deps found");
+            }
+        }
+
+        merge_tasks.into_values().collect::<Vec<_>>()
+    };
 
     let mut buckets = GoffBuckets::default();
     loop {
@@ -121,16 +169,64 @@ pub fn merge_by_name(stage: &mut Stage1) -> cu::Result<()> {
                 merge_tasks.push(task);
                 continue;
             }
-            let (k1, k2) = task.merge_pair();
-            let t1 = stage.types.get(&k1).unwrap();
-            let t2 = stage.types.get(&k2).unwrap();
-            let merged = cu::check!(t1.get_merged(t2), "failed to merge types {k1} and {k2}")?;
-            stage.types.insert(k1, merged.clone());
-            stage.types.insert(k2, merged);
-            cu::check!(buckets.merge(k1, k2), "failed to merge {k1} and {k2} in buckets")?;
+            task.execute(&mut stage.types, &mut buckets)?;
         }
         if len_before == merge_tasks.len() {
             break;
+        }
+    }
+    if !merge_tasks.is_empty() {
+        // remove circular dependencies
+        let mut depmap = BTreeMap::default();
+        for task in &merge_tasks {
+            task.track_deps(&mut depmap);
+        }
+        let keys = depmap.keys().copied().collect::<Vec<_>>();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for merge in keys.iter().copied() {
+                let curr_deps = depmap.get(&merge).unwrap();
+                let mut new_deps = curr_deps.clone();
+                for d in curr_deps {
+                    if let Some(d_deps) = depmap.get(d) {
+                        new_deps.extend(d_deps.iter().copied());
+                    }
+                }
+                if curr_deps.len() != new_deps.len() {
+                    changed = true;
+                    depmap.insert(merge, new_deps);
+                }
+            }
+        }
+        let mut circular_depmap = BTreeMap::<GoffPair, BTreeSet<GoffPair>>::default();
+        for (merge, all_deps) in &depmap {
+            let circular_deps = circular_depmap.entry(*merge).or_default();
+            for dep in all_deps {
+                if let Some(inverse_deps) = depmap.get(dep) {
+                    if inverse_deps.contains(merge) {
+                        circular_deps.insert(*dep);
+                    }
+                }
+            }
+        }
+        for task in &mut merge_tasks {
+            task.remove_deps(&circular_depmap);
+        }
+        // continue merging
+        loop {
+            let len_before = merge_tasks.len();
+            for mut task in std::mem::take(&mut merge_tasks) {
+                let can_merge = task.update_deps(&buckets);
+                if !can_merge {
+                    merge_tasks.push(task);
+                    continue;
+                }
+                task.execute(&mut stage.types, &mut buckets)?;
+            }
+            if len_before == merge_tasks.len() {
+                break;
+            }
         }
     }
 

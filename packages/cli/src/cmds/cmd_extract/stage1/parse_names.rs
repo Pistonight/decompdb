@@ -93,7 +93,7 @@ pub async fn parse_names(stage: &Stage0, command: &CompileCommand) -> cu::Result
                 stage.name
             )?,
         };
-        command.parse_ast_nodes(&requests, &ast_nodes, &stage.ns, &mut final_names)?;
+        command.parse_ast_nodes(&requests, &ast_nodes, &stage.ns, &stage.config, &mut final_names)?;
     }
 
     Ok(final_names)
@@ -348,12 +348,13 @@ impl TypeParseCommand {
         requests: &[ParseRequest<'_>],
         ast_nodes: &BTreeMap<String, Node<Ast>>,
         ns: &NamespaceMaps,
+        config: &Config,
         output: &mut GoffMap<NamespacedTemplatedName>,
     ) -> cu::Result<()> {
         // let mut output = GoffMap::default();
         for req in requests {
             let node = ast_nodes.get(&req.token).unwrap();
-            match parse_ast(&node, req.namespace, ns) {
+            match parse_ast(&node, req.namespace, ns, config) {
                 Ok(parsed) => {
                     output.insert(req.goff, parsed);
                 }
@@ -442,7 +443,7 @@ struct AstType {
     qual_type: String,
 }
 
-fn parse_ast(node: &Node<Ast>, namespace: &Namespace, nsmaps: &NamespaceMaps) -> cu::Result<NamespacedTemplatedName> {
+fn parse_ast(node: &Node<Ast>, namespace: &Namespace, nsmaps: &NamespaceMaps, config: &Config) -> cu::Result<NamespacedTemplatedName> {
     cu::ensure!(node.inner.len() == 1, "TypedefDecl node should have inner length 1");
     let node = &node.inner[0];
     let Ast::ElaboratedType { qualifier, .. } = &node.kind else {
@@ -459,7 +460,7 @@ fn parse_ast(node: &Node<Ast>, namespace: &Namespace, nsmaps: &NamespaceMaps) ->
     };
 
     let template_args = cu::check!(
-        parse_template_spec_ast(node, nsmaps),
+        parse_template_spec_ast(node, nsmaps, config),
         "failed to parse outermost templates"
     )?;
 
@@ -471,6 +472,7 @@ fn parse_ast(node: &Node<Ast>, namespace: &Namespace, nsmaps: &NamespaceMaps) ->
 fn parse_template_spec_ast(
     node: &Node<Ast>,
     ns: &NamespaceMaps,
+    config: &Config,
 ) -> cu::Result<Vec<TemplateArg<NamespacedTemplatedName>>> {
     let mut template_args = Vec::new();
     // iterate through the templates
@@ -479,18 +481,19 @@ fn parse_template_spec_ast(
             continue;
         }
         cu::ensure!(n.inner.len() == 1, "TemplateArgument node should have inner length 1");
-        template_args.push(parse_template_arg_ast(&n.inner[0], ns)?);
+        template_args.push(parse_template_arg_ast(&n.inner[0], ns, config)?);
     }
 
     Ok(template_args)
 }
-fn parse_template_arg_ast(node: &Node<Ast>, ns: &NamespaceMaps) -> cu::Result<TemplateArg<NamespacedTemplatedName>> {
-    parse_template_arg_ast_recur(node, ns, "", None)
+fn parse_template_arg_ast(node: &Node<Ast>, ns: &NamespaceMaps, config: &Config) -> cu::Result<TemplateArg<NamespacedTemplatedName>> {
+    parse_template_arg_ast_recur(node, ns, config, "", None)
 }
 
 fn parse_template_arg_ast_recur(
     node: &Node<Ast>,
     ns: &NamespaceMaps,
+    config: &Config,
     qualifier: &str,
     elaborated_qual_type: Option<&str>,
 ) -> cu::Result<TemplateArg<NamespacedTemplatedName>> {
@@ -514,14 +517,14 @@ fn parse_template_arg_ast_recur(
                 "unsigned short" => "u16",
                 "unsigned int" => "u32",
                 "unsigned long" => "u64", // in most cases
-                "char" => "i8",
                 "short" => "i16",
                 "int" => "i32",
                 "long" => "i64", // in most cases
                 "float" => "f32",
                 "double" => "f64",
                 // implementation defined:
-                "wchar_t" => "i16",
+                "char" => config.extract.char_repr.to_str(),
+                "wchar_t" => config.extract.wchar_repr.to_str(),
                 _ => {
                     cu::bail!(
                         "unexpected builtin qual_type: {} (please add it if you need).",
@@ -537,7 +540,7 @@ fn parse_template_arg_ast_recur(
             cu::ensure!(node.inner.len() == 1, "ElaboratedType node should have inner length 1");
             let new_qualifier = format!("{qualifier}{q}");
             let qual_type = ty.qual_type.as_str();
-            parse_template_arg_ast_recur(&node.inner[0], ns, &new_qualifier, Some(qual_type))
+            parse_template_arg_ast_recur(&node.inner[0], ns, config, &new_qualifier, Some(qual_type))
         }
         Ast::TemplateSpecializationType { template_name } => {
             let Some(base_name) = template_name.strip_prefix(qualifier) else {
@@ -554,7 +557,7 @@ fn parse_template_arg_ast_recur(
                 "template base name should not contain namespaces"
             );
             let template_args = cu::check!(
-                parse_template_spec_ast(node, ns),
+                parse_template_spec_ast(node, ns, config),
                 "failed to parse nested templates at {base_name}"
             )?;
             let name = cu::check!(
@@ -587,7 +590,7 @@ fn parse_template_arg_ast_recur(
             cu::ensure!(node.inner.len() == 1, "{:?} node should have inner length 1", node.kind);
             let node = &node.inner[0];
             let pointee = cu::check!(
-                parse_template_arg_ast_recur(node, ns, qualifier, None),
+                parse_template_arg_ast_recur(node, ns, config, qualifier, None),
                 "failed to parse pointee type"
             )?;
             let TemplateArg::Type(ty) = pointee else {
@@ -609,12 +612,12 @@ fn parse_template_arg_ast_recur(
             // specializations, for now, we treat them as the same
             cu::ensure!(node.inner.len() == 1, "QualType node should have inner length 1");
             let node = &node.inner[0];
-            parse_template_arg_ast_recur(node, ns, qualifier, None)
+            parse_template_arg_ast_recur(node, ns, config, qualifier, None)
         }
         Ast::ParenType => {
             cu::ensure!(node.inner.len() == 1, "ParenType node should have inner length 1");
             let node = &node.inner[0];
-            parse_template_arg_ast_recur_paren_type(node, ns)
+            parse_template_arg_ast_recur_paren_type(node, ns, config)
         }
         Ast::FunctionProtoType => {
             cu::ensure!(
@@ -624,7 +627,7 @@ fn parse_template_arg_ast_recur(
             let mut func_types = Vec::with_capacity(node.inner.len());
             for node in &node.inner {
                 let inner = cu::check!(
-                    parse_template_arg_ast_recur(node, ns, "", None),
+                    parse_template_arg_ast_recur(node, ns, config, "", None),
                     "failed to parse function type argument type"
                 )?;
                 let TemplateArg::Type(ty) = inner else {
@@ -640,7 +643,7 @@ fn parse_template_arg_ast_recur(
                 "member pointer type must have exactly 2 inner nodes"
             );
             let thisty = cu::check!(
-                parse_template_arg_ast_recur(&node.inner[0], ns, "", None),
+                parse_template_arg_ast_recur(&node.inner[0], ns, config, "", None),
                 "failed to parse this type for member pointer type"
             )?;
             let TemplateArg::Type(thisty) = thisty else {
@@ -650,7 +653,7 @@ fn parse_template_arg_ast_recur(
                 cu::bail!("cannot have composite type as the this type for member pointer type");
             };
             let pointee = cu::check!(
-                parse_template_arg_ast_recur(&node.inner[1], ns, "", None),
+                parse_template_arg_ast_recur(&node.inner[1], ns, config, "", None),
                 "failed to parse pointee type for member pointer type"
             )?;
             let TemplateArg::Type(pointee) = pointee else {
@@ -670,9 +673,10 @@ fn parse_template_arg_ast_recur(
 fn parse_template_arg_ast_recur_paren_type(
     node: &Node<Ast>,
     ns: &NamespaceMaps,
+    config: &Config
 ) -> cu::Result<TemplateArg<NamespacedTemplatedName>> {
     match &node.kind {
-        Ast::FunctionProtoType => parse_template_arg_ast_recur(node, ns, "", None),
+        Ast::FunctionProtoType => parse_template_arg_ast_recur(node, ns, config, "", None),
         _ => {
             cu::bail!("unexpected node while parsing ParenType: {node:#?}");
         }

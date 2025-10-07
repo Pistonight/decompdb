@@ -588,10 +588,7 @@ impl Loff {
 
 /// Global offset into DWARF
 #[rustfmt::skip]
-#[derive(
-    DebugCustom, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord,
-    From, Into, Display
-)]
+#[derive(DebugCustom, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, From, Into, Display)]
 #[display("0x{:08x}", self.0)]
 #[debug("0x{:08x}", self.0)]
 pub struct Goff(usize);
@@ -676,3 +673,29 @@ impl TreeRepr for Goff {
 }
 
 pub type GoffMapFn<'a> = Box<dyn Fn(Goff) -> cu::Result<Goff> + 'a>;
+
+#[rustfmt::skip]
+#[derive(DebugCustom, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Display)]
+#[display("({}, {})", self.0, self.1)]
+#[debug("({}, {})", self.0, self.1)]
+pub struct GoffPair(Goff, Goff);
+impl GoffPair {
+    pub fn to_pair(&self) -> (Goff, Goff) {
+        (*self).into()
+    }
+}
+impl From<(Goff, Goff)> for GoffPair {
+    fn from(value: (Goff, Goff)) -> Self {
+        let (a,b) = value;
+        if a < b {
+            Self(a, b)
+        } else {
+            Self(b, a)
+        }
+    }
+}
+impl From<GoffPair> for (Goff, Goff) {
+    fn from(value: GoffPair) -> Self {
+        (value.0, value.1)
+    }
+}

@@ -15,6 +15,10 @@ pub struct CfgExtract {
     pub ptmd_repr: (Prim, u32),
     /// Representation of PTMF, as an array of primitive
     pub ptmf_repr: (Prim, u32),
+    /// Representation of char
+    pub char_repr: Prim,
+    /// Representation of wchar_t
+    pub wchar_repr: Prim,
     /// Regex for the virtual function pointer field
     pub vfptr_field_regex: Regex,
     /// Rules for the type parser

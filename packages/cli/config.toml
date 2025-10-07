@@ -25,6 +25,8 @@ build-command = ["ninja"]
 pointer-width = 64
 ptmd-repr = ["u64", 1]
 ptmf-repr = ["u64", 2]
+char-repr = "u8"
+wchar-repr = "u32"
 vfptr-field-regex = "^_vptr\\$"
 
 [extract.type-parser]
