@@ -443,7 +443,12 @@ struct AstType {
     qual_type: String,
 }
 
-fn parse_ast(node: &Node<Ast>, namespace: &Namespace, nsmaps: &NamespaceMaps, config: &Config) -> cu::Result<NamespacedTemplatedName> {
+fn parse_ast(
+    node: &Node<Ast>,
+    namespace: &Namespace,
+    nsmaps: &NamespaceMaps,
+    config: &Config,
+) -> cu::Result<NamespacedTemplatedName> {
     cu::ensure!(node.inner.len() == 1, "TypedefDecl node should have inner length 1");
     let node = &node.inner[0];
     let Ast::ElaboratedType { qualifier, .. } = &node.kind else {
@@ -486,7 +491,11 @@ fn parse_template_spec_ast(
 
     Ok(template_args)
 }
-fn parse_template_arg_ast(node: &Node<Ast>, ns: &NamespaceMaps, config: &Config) -> cu::Result<TemplateArg<NamespacedTemplatedName>> {
+fn parse_template_arg_ast(
+    node: &Node<Ast>,
+    ns: &NamespaceMaps,
+    config: &Config,
+) -> cu::Result<TemplateArg<NamespacedTemplatedName>> {
     parse_template_arg_ast_recur(node, ns, config, "", None)
 }
 
@@ -673,7 +682,7 @@ fn parse_template_arg_ast_recur(
 fn parse_template_arg_ast_recur_paren_type(
     node: &Node<Ast>,
     ns: &NamespaceMaps,
-    config: &Config
+    config: &Config,
 ) -> cu::Result<TemplateArg<NamespacedTemplatedName>> {
     match &node.kind {
         Ast::FunctionProtoType => parse_template_arg_ast_recur(node, ns, config, "", None),

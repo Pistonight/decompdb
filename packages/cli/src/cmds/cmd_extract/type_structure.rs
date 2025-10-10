@@ -50,7 +50,7 @@ impl Stage1 {
             name: String::new(),
             types: self.types,
             config: self.config,
-            symbols: self.symbols
+            symbols: self.symbols,
         })
     }
 }
@@ -134,6 +134,49 @@ impl Type1 {
         }
         Ok(())
     }
+    pub fn mark(&self, self_goff: Goff, marked: &mut GoffSet) {
+        match self {
+            Type1::Prim(prim) => {
+                marked.insert(Goff::prim(*prim));
+            }
+            Type1::Enum(name, _, other_names) => {
+                marked.insert(self_goff);
+                if let Some(name) = name {
+                    name.mark(marked);
+                }
+                for n in other_names {
+                    n.mark(marked);
+                }
+            }
+            Type1::Union(name, data, other_names) => {
+                marked.insert(self_goff);
+                if let Some(name) = name {
+                    name.mark(marked);
+                }
+                for n in other_names {
+                    n.mark(marked);
+                }
+                data.mark(marked);
+            }
+            Type1::Struct(name, data, other_names) => {
+                marked.insert(self_goff);
+                if let Some(name) = name {
+                    name.mark(marked);
+                }
+                for n in other_names {
+                    n.mark(marked);
+                }
+                data.mark(marked);
+            }
+            Type1::EnumDecl(name, names) | Type1::UnionDecl(name, names) | Type1::StructDecl(name, names) => {
+                // do not mark decl as strong reference
+                name.mark(marked);
+                for n in names {
+                    n.mark(marked);
+                }
+            }
+        }
+    }
 
     /// Add merge dependencies if self and other are compatible for merging, return an error if not compatible
     pub fn add_merge_deps(&self, other: &Self, task: &mut MergeTask) -> cu::Result<()> {
@@ -182,9 +225,7 @@ impl Type1 {
                 Ok(Type1::Prim(*a))
             }
             // prefer primitive types
-            (Type1::Prim(a), _) | (_, Type1::Prim(a)) => {
-                Ok(Type1::Prim(*a))
-            }
+            (Type1::Prim(a), _) | (_, Type1::Prim(a)) => Ok(Type1::Prim(*a)),
             (Type1::Enum(name_a, a, other_names_a), Type1::Enum(name_b, b, other_names_b)) => {
                 cu::ensure!(a == b, "cannot merge 2 enums of different enumerators or sizes");
                 let mut other_names = BTreeSet::new();
@@ -193,14 +234,17 @@ impl Type1 {
                 let name = select_name(name_a, name_b);
                 Ok(Type1::Enum(name, a.clone(), other_names.into_iter().collect()))
             }
-            (Type1::Enum(name, data, other_names_a), Type1::EnumDecl(name_b, other_names_b))  |
-            (Type1::EnumDecl(name_b, other_names_b), Type1::Enum(name, data, other_names_a)) 
-            => {
+            (Type1::Enum(name, data, other_names_a), Type1::EnumDecl(name_b, other_names_b))
+            | (Type1::EnumDecl(name_b, other_names_b), Type1::Enum(name, data, other_names_a)) => {
                 let mut other_names = BTreeSet::new();
                 other_names.extend(other_names_a.clone());
                 other_names.extend(other_names_b.clone());
                 other_names.insert(name_b.clone());
-                Ok(Type1::Enum(name.clone(), data.clone(), other_names.into_iter().collect()))
+                Ok(Type1::Enum(
+                    name.clone(),
+                    data.clone(),
+                    other_names.into_iter().collect(),
+                ))
             }
             (Type1::EnumDecl(a, other_a), Type1::EnumDecl(b, other_b)) => {
                 let name = a.min(b).clone();
@@ -212,12 +256,11 @@ impl Type1 {
                 Ok(Type1::EnumDecl(name, other_names.into_iter().collect()))
             }
             // prefer enums over struct or union
-            (Type1::Enum(name, data, other_names), _)  | (_, Type1::Enum(name, data, other_names)) 
-            => {
+            (Type1::Enum(name, data, other_names), _) | (_, Type1::Enum(name, data, other_names)) => {
                 Ok(Type1::Enum(name.clone(), data.clone(), other_names.clone()))
             }
             // enum decl should not be merged with other
-            (Type1::EnumDecl(_, _), _)  | (_, Type1::EnumDecl(_, _))  => {
+            (Type1::EnumDecl(_, _), _) | (_, Type1::EnumDecl(_, _)) => {
                 cu::bail!("enum declaration cannot be merged with non-enum");
             }
             (Type1::Struct(name_a, a, other_names_a), Type1::Struct(name_b, b, other_names_b)) => {
@@ -228,14 +271,17 @@ impl Type1 {
                 let name = select_name(name_a, name_b);
                 Ok(Type1::Struct(name, data, other_names.into_iter().collect()))
             }
-            (Type1::Struct(name, data, other_names_a), Type1::StructDecl(name_b, other_names_b))  |
-            (Type1::StructDecl(name_b, other_names_b), Type1::Struct(name, data, other_names_a)) 
-            => {
+            (Type1::Struct(name, data, other_names_a), Type1::StructDecl(name_b, other_names_b))
+            | (Type1::StructDecl(name_b, other_names_b), Type1::Struct(name, data, other_names_a)) => {
                 let mut other_names = BTreeSet::new();
                 other_names.extend(other_names_a.clone());
                 other_names.extend(other_names_b.clone());
                 other_names.insert(name_b.clone());
-                Ok(Type1::Struct(name.clone(), data.clone(), other_names.into_iter().collect()))
+                Ok(Type1::Struct(
+                    name.clone(),
+                    data.clone(),
+                    other_names.into_iter().collect(),
+                ))
             }
             (Type1::StructDecl(a, other_a), Type1::StructDecl(b, other_b)) => {
                 let name = a.min(b).clone();
@@ -247,12 +293,11 @@ impl Type1 {
                 Ok(Type1::StructDecl(name, other_names.into_iter().collect()))
             }
             // prefer struct over union
-            (Type1::Struct(name, data, other_names), _)  | (_, Type1::Struct(name, data, other_names)) 
-            => {
+            (Type1::Struct(name, data, other_names), _) | (_, Type1::Struct(name, data, other_names)) => {
                 Ok(Type1::Struct(name.clone(), data.clone(), other_names.clone()))
             }
             // struct decl should not be merged with other
-            (Type1::StructDecl(_, _), _)  | (_, Type1::StructDecl(_, _))  => {
+            (Type1::StructDecl(_, _), _) | (_, Type1::StructDecl(_, _)) => {
                 cu::bail!("struct declaration cannot be merged with union");
             }
             (Type1::Union(name_a, a, other_names_a), Type1::Union(name_b, _, other_names_b)) => {
@@ -262,14 +307,17 @@ impl Type1 {
                 let name = select_name(name_a, name_b);
                 Ok(Type1::Union(name, a.clone(), other_names.into_iter().collect()))
             }
-            (Type1::Union(name, data, other_names_a), Type1::UnionDecl(name_b, other_names_b))  |
-            (Type1::UnionDecl(name_b, other_names_b), Type1::Union(name, data, other_names_a)) 
-            => {
+            (Type1::Union(name, data, other_names_a), Type1::UnionDecl(name_b, other_names_b))
+            | (Type1::UnionDecl(name_b, other_names_b), Type1::Union(name, data, other_names_a)) => {
                 let mut other_names = BTreeSet::new();
                 other_names.extend(other_names_a.clone());
                 other_names.extend(other_names_b.clone());
                 other_names.insert(name_b.clone());
-                Ok(Type1::Union(name.clone(), data.clone(), other_names.into_iter().collect()))
+                Ok(Type1::Union(
+                    name.clone(),
+                    data.clone(),
+                    other_names.into_iter().collect(),
+                ))
             }
             (Type1::UnionDecl(a, other_a), Type1::UnionDecl(b, other_b)) => {
                 let name = a.min(b).clone();
@@ -401,45 +449,15 @@ impl Type0 {
                 if let Some(name) = name {
                     name.mark(marked);
                 }
-                for targ in &data.template_args {
-                    targ.mark(marked);
-                }
-                for member in &data.members {
-                    let _: Result<_, _> = member.ty.for_each(|goff| {
-                        marked.insert(*goff);
-                        Ok(())
-                    });
-                }
                 marked.insert(self_goff);
+                data.mark(marked);
             }
             Type0::Struct(name, data) => {
                 if let Some(name) = name {
                     name.mark(marked);
                 }
-                for targ in &data.template_args {
-                    let TemplateArg::Type(tree) = targ else {
-                        continue;
-                    };
-                    let _: Result<_, _> = tree.for_each(|goff| {
-                        marked.insert(*goff);
-                        Ok(())
-                    });
-                }
-                for (_, ventry) in &data.vtable {
-                    for t in &ventry.function_types {
-                        let _: Result<_, _> = t.for_each(|goff| {
-                            marked.insert(*goff);
-                            Ok(())
-                        });
-                    }
-                }
-                for member in &data.members {
-                    let _: Result<_, _> = member.ty.for_each(|goff| {
-                        marked.insert(*goff);
-                        Ok(())
-                    });
-                }
                 marked.insert(self_goff);
+                data.mark(marked);
             }
             Type0::Tree(tree) => {
                 let _: Result<_, _> = tree.for_each(|goff| {
@@ -451,10 +469,7 @@ impl Type0 {
                 marked.insert(*goff);
                 marked.insert(self_goff);
             }
-            Type0::EnumDecl(ns, name)
-            | Type0::UnionDecl(ns, name)
-            | Type0::StructDecl(ns, name)
-             => {
+            Type0::EnumDecl(ns, name) | Type0::UnionDecl(ns, name) | Type0::StructDecl(ns, name) => {
                 ns.mark(marked);
                 name.mark(marked);
                 marked.insert(self_goff);
@@ -528,58 +543,43 @@ impl Type0Union {
         }
         Ok(())
     }
+    /// Mark referenced types for GC
+    pub fn mark(&self, marked: &mut GoffSet) {
+        for targ in &self.template_args {
+            targ.mark(marked);
+        }
+        for member in &self.members {
+            let _: Result<_, _> = member.ty.for_each(|goff| {
+                marked.insert(*goff);
+                Ok(())
+            });
+        }
+    }
     /// Add merge dependencies if self and other are compatible for merging, return an error if not compatible
     pub fn add_merge_deps(&self, other: &Self, task: &mut MergeTask) -> cu::Result<()> {
-        cu::ensure!(self.byte_size == other.byte_size, "unions of different sizes cannot be merged");
-        cu::ensure!(self.template_args.len() == other.template_args.len(), "unions of different template arg count cannot be merged");
-        for (a,b) in std::iter::zip(&self.template_args, &other.template_args) {
-            cu::check!(a.add_merge_deps(b, task), "add_merge_deps failed for union template args")?;
+        cu::ensure!(
+            self.byte_size == other.byte_size,
+            "unions of different sizes cannot be merged"
+        );
+        cu::ensure!(
+            self.template_args.len() == other.template_args.len(),
+            "unions of different template arg count cannot be merged"
+        );
+        for (a, b) in std::iter::zip(&self.template_args, &other.template_args) {
+            cu::check!(
+                a.add_merge_deps(b, task),
+                "add_merge_deps failed for union template args"
+            )?;
         }
-        cu::ensure!(self.members.len() == other.members.len(), "unions of different member count cannot be merged");
+        cu::ensure!(
+            self.members.len() == other.members.len(),
+            "unions of different member count cannot be merged"
+        );
         for (a, b) in std::iter::zip(&self.members, &other.members) {
             cu::check!(a.add_merge_deps(b, task), "add_merge_deps failed for union members")?;
         }
         Ok(())
     }
-
-    // pub fn merge_checked(&self, other: &Self, merges: &mut MergeQueue) -> cu::Result<()> {
-    //     self.check_merge_precondition(other)?;
-    //     let mut mq = MergeQueue::default();
-    //     for (a, b) in std::iter::zip(&self.members, &other.members) {
-    //         cu::check!(a.merge_checked(b, &mut mq), "cannot merge union member")?;
-    //     }
-    //     merges.extend(mq)?;
-    //     Ok(())
-    // }
-    // pub fn merge_from(&mut self, other: &mut Self) -> cu::Result<()> {
-    //     self.check_merge_precondition(other)?;
-    //     // we don't have any "partial definitions" for unions observed yet
-    //     for (a, b) in std::iter::zip(&self.members, &other.members) {
-    //         cu::ensure!(
-    //             a.name == b.name,
-    //             "cannot merge 2 unions of different member names: {:?} and {:?}",
-    //             a.name,
-    //             b.name
-    //         );
-    //     }
-    //     Ok(())
-    // }
-    //
-    // fn check_merge_precondition(&self, other: &Self) -> cu::Result<()> {
-    //     cu::ensure!(
-    //         self.byte_size == other.byte_size,
-    //         "union byte sizes are not equal: 0x{:x} != 0x{:x}",
-    //         self.byte_size,
-    //         other.byte_size
-    //     );
-    //     cu::ensure!(
-    //         self.members.len() == other.members.len(),
-    //         "union member counts are not equal: {} != {}",
-    //         self.members.len(),
-    //         other.members.len()
-    //     );
-    //     Ok(())
-    // }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -609,13 +609,50 @@ impl Type0Struct {
         }
         Ok(())
     }
+    /// Mark referenced types for GC
+    pub fn mark(&self, marked: &mut GoffSet) {
+        for targ in &self.template_args {
+            let TemplateArg::Type(tree) = targ else {
+                continue;
+            };
+            let _: Result<_, _> = tree.for_each(|goff| {
+                marked.insert(*goff);
+                Ok(())
+            });
+        }
+        for (_, ventry) in &self.vtable {
+            for t in &ventry.function_types {
+                let _: Result<_, _> = t.for_each(|goff| {
+                    marked.insert(*goff);
+                    Ok(())
+                });
+            }
+        }
+        for member in &self.members {
+            let _: Result<_, _> = member.ty.for_each(|goff| {
+                marked.insert(*goff);
+                Ok(())
+            });
+        }
+    }
 
     /// Add merge dependencies if self and other are compatible for merging, return an error if not compatible
     pub fn add_merge_deps(&self, other: &Self, task: &mut MergeTask) -> cu::Result<()> {
-        cu::ensure!(self.byte_size == other.byte_size, "structs of different sizes cannot be merged (0x{:x} != 0x{:x})", self.byte_size, other.byte_size);
-        cu::ensure!(self.template_args.len() == other.template_args.len(), "structs of different template arg count cannot be merged");
-        for (a,b) in std::iter::zip(&self.template_args, &other.template_args) {
-            cu::check!(a.add_merge_deps(b, task), "add_merge_deps failed for struct template args")?;
+        cu::ensure!(
+            self.byte_size == other.byte_size,
+            "structs of different sizes cannot be merged (0x{:x} != 0x{:x})",
+            self.byte_size,
+            other.byte_size
+        );
+        cu::ensure!(
+            self.template_args.len() == other.template_args.len(),
+            "structs of different template arg count cannot be merged"
+        );
+        for (a, b) in std::iter::zip(&self.template_args, &other.template_args) {
+            cu::check!(
+                a.add_merge_deps(b, task),
+                "add_merge_deps failed for struct template args"
+            )?;
         }
         // for vtable, we might not have the full vtable until all CUs are merged,
         // so we can only check if there are any existing conflicts
@@ -637,7 +674,10 @@ impl Type0Struct {
             }
         }
 
-        cu::ensure!(self.members.len() == other.members.len(), "structs of different member count cannot be merged");
+        cu::ensure!(
+            self.members.len() == other.members.len(),
+            "structs of different member count cannot be merged"
+        );
         for (a, b) in std::iter::zip(&self.members, &other.members) {
             cu::check!(a.add_merge_deps(b, task), "add_merge_deps failed for struct members")?;
         }
@@ -675,71 +715,13 @@ impl Type0Struct {
             }
         }
         new_vtable.sort_by_key(|x| x.0);
-        Ok(Self { 
+        Ok(Self {
             template_args: self.template_args.clone(),
-            byte_size: self.byte_size, 
-            vtable: new_vtable, 
-            members: self.members.clone()
+            byte_size: self.byte_size,
+            vtable: new_vtable,
+            members: self.members.clone(),
         })
     }
-
-    // pub fn merge_from(&mut self, other: &mut Self) -> cu::Result<()> {
-    //     self.check_merge_precondition(other)?;
-    //     // we don't have any "partial definitions" for structs observed yet
-    //     for (a, b) in std::iter::zip(&self.members, &other.members) {
-    //         cu::ensure!(
-    //             a.name == b.name,
-    //             "cannot merge 2 structs of different member names: {:?} and {:?}",
-    //             a.name,
-    //             b.name
-    //         );
-    //         cu::ensure!(
-    //             a.offset == b.offset,
-    //             "cannot merge 2 structs of different member offsets: {:?} and {:?}",
-    //             a.offset,
-    //             b.offset
-    //         );
-    //         cu::ensure!(
-    //             a.special == b.special,
-    //             "cannot merge 2 structs of different member specials: {:?} and {:?}",
-    //             a.special,
-    //             b.special
-    //         );
-    //     }
-    //
-    //     // merge vtables
-    //     // clone so if error, we don't change anything
-    //     let mut new_vtable = self.vtable.clone();
-    //     for (i, other_entry) in &other.vtable {
-    //         if other_entry.is_dtor() {
-    //             if let Some((_, self_entry)) = self.vtable.iter().find(|(_, e)| e.is_dtor()) {
-    //                 cu::ensure!(
-    //                     other_entry.name == self_entry.name,
-    //                     "cannot merge vtable dtor entries of different names: {:?} and {:?}",
-    //                     other_entry.name,
-    //                     self_entry.name
-    //                 );
-    //             } else {
-    //                 new_vtable.push((*i, other_entry.clone()));
-    //             }
-    //             continue;
-    //         }
-    //         if let Some((_, self_entry)) = self.vtable.iter().find(|(j, _)| i == j) {
-    //             cu::ensure!(
-    //                 other_entry.name == self_entry.name,
-    //                 "cannot merge vtable entries of different names, at index {i}: {:?} and {:?}",
-    //                 other_entry.name,
-    //                 self_entry.name
-    //             );
-    //         } else {
-    //             new_vtable.push((*i, other_entry.clone()));
-    //         }
-    //     }
-    //     new_vtable.sort_by_key(|x| x.0);
-    //     self.vtable = new_vtable;
-    //
-    //     Ok(())
-    // }
 }
 
 /// A struct or union member
@@ -772,10 +754,19 @@ impl Member {
     }
     /// Add merge dependencies if self and other are compatible for merging, return an error if not compatible
     pub fn add_merge_deps(&self, other: &Self, task: &mut MergeTask) -> cu::Result<()> {
-        cu::ensure!(self.offset == other.offset, "members of different offsets cannot be merged");
+        cu::ensure!(
+            self.offset == other.offset,
+            "members of different offsets cannot be merged"
+        );
         cu::ensure!(self.name == other.name, "members of different names cannot be merged");
-        cu::ensure!(self.special == other.special, "members of different special types cannot be merged");
-        cu::check!(tree_add_merge_deps(&self.ty, &other.ty, task), "add_merge_deps failed for member")
+        cu::ensure!(
+            self.special == other.special,
+            "members of different special types cannot be merged"
+        );
+        cu::check!(
+            tree_add_merge_deps(&self.ty, &other.ty, task),
+            "add_merge_deps failed for member"
+        )
     }
 }
 
@@ -830,11 +821,19 @@ impl VtableEntry {
     }
     /// Add merge dependencies if self and other are compatible for merging, return an error if not compatible
     pub fn add_merge_deps(&self, other: &Self, task: &mut MergeTask) -> cu::Result<()> {
-        cu::ensure!(self.name == other.name, "vtable entries of different names cannot be merged");
-        cu::ensure!(self.function_types.len() == other.function_types.len(), 
-            "vtable entries of different type lengths cannot be merged");
-        for(a, b) in std::iter::zip(&self.function_types, &other.function_types) {
-            cu::check!(tree_add_merge_deps(a, b, task) , "add_merge_deps failed for vtable types")?;
+        cu::ensure!(
+            self.name == other.name,
+            "vtable entries of different names cannot be merged"
+        );
+        cu::ensure!(
+            self.function_types.len() == other.function_types.len(),
+            "vtable entries of different type lengths cannot be merged"
+        );
+        for (a, b) in std::iter::zip(&self.function_types, &other.function_types) {
+            cu::check!(
+                tree_add_merge_deps(a, b, task),
+                "add_merge_deps failed for vtable types"
+            )?;
         }
         Ok(())
     }
@@ -925,9 +924,7 @@ pub enum StructuredName {
 impl StructuredName {
     pub fn permutated_string_reprs(&self, permutater: &mut StructuredNamePermutater) -> cu::Result<BTreeSet<String>> {
         match self {
-            Self::Name(name) => {
-                name.permutated_string_reprs(permutater)
-            }
+            Self::Name(name) => name.permutated_string_reprs(permutater),
             Self::Goff(base, templates) => {
                 let base_names = cu::check!(
                     base.permutated_string_reprs(permutater),
@@ -1069,9 +1066,7 @@ impl TemplateArg<Goff> {
     pub fn permutated_string_reprs(&self, permutater: &mut StructuredNamePermutater) -> cu::Result<BTreeSet<String>> {
         match self {
             TemplateArg::Const(x) => Ok(std::iter::once(x.to_string()).collect()),
-            TemplateArg::Type(tree) => {
-                tree_goff_permutated_string_reprs(tree, permutater)
-            }
+            TemplateArg::Type(tree) => tree_goff_permutated_string_reprs(tree, permutater),
             TemplateArg::StaticConst => Ok(std::iter::once("[static]".to_string()).collect()),
         }
     }
@@ -1127,9 +1122,7 @@ fn tree_goff_permutated_string_reprs(
     permutater: &mut StructuredNamePermutater,
 ) -> cu::Result<BTreeSet<String>> {
     match tree {
-        Tree::Base(k) => {
-            permutater.permutated_string_reprs_goff(*k)
-        }
+        Tree::Base(k) => permutater.permutated_string_reprs_goff(*k),
         Tree::Array(base, len) => {
             let base_names = cu::check!(
                 tree_goff_permutated_string_reprs(base, permutater),
@@ -1321,9 +1314,7 @@ fn tree_name_permutated_string_reprs(
 fn permute(input: &[BTreeSet<String>]) -> Vec<Vec<String>> {
     match input.len() {
         0 => vec![],
-        1 => {
-            input[0].iter().map(|x| vec![x.to_string()]).collect()
-        }
+        1 => input[0].iter().map(|x| vec![x.to_string()]).collect(),
         len => {
             let recur_output = permute(&input[..len - 1]);
             let mut output = Vec::with_capacity(recur_output.len() * len);
@@ -1458,7 +1449,10 @@ impl SymbolInfo {
             self.link_name,
             other.link_name
         );
-        cu::ensure!(self.address == other.address, "cannot merge symbol info with different addresses");
+        cu::ensure!(
+            self.address == other.address,
+            "cannot merge symbol info with different addresses"
+        );
         cu::ensure!(
             self.param_names == other.param_names,
             "cannot merge symbol info with different param_names"
@@ -1471,12 +1465,13 @@ impl SymbolInfo {
 #[derive(Debug)]
 pub struct MergeTask {
     deps: Vec<GoffPair>,
-    merge: GoffPair
+    merge: GoffPair,
 }
 impl MergeTask {
     pub fn new(k1: Goff, k2: Goff) -> Self {
         Self {
-            deps: vec![],merge: (k1, k2).into()
+            deps: vec![],
+            merge: (k1, k2).into(),
         }
     }
     pub fn add_dep(&mut self, k1: Goff, k2: Goff) {
@@ -1494,15 +1489,13 @@ impl MergeTask {
             buckets.primary_fallback(k1) != buckets.primary_fallback(k2)
         });
         // let entry = dep_sets.entry(self.merge_pair()).or_default();
-        // for 
+        // for
         self.deps.is_empty()
     }
 
     pub fn remove_deps(&mut self, depmap: &BTreeMap<GoffPair, BTreeSet<GoffPair>>) {
         if let Some(to_remove) = depmap.get(&self.merge) {
-            self.deps.retain(|pair| {
-                !to_remove.contains(pair)
-            });
+            self.deps.retain(|pair| !to_remove.contains(pair));
         }
     }
 
@@ -1526,26 +1519,47 @@ fn tree_add_merge_deps(a: &Tree<Goff>, b: &Tree<Goff>, task: &mut MergeTask) -> 
         (Tree::Base(a), Tree::Base(b)) => task.add_dep(*a, *b),
         (Tree::Array(a, len_a), Tree::Array(b, len_b)) => {
             cu::ensure!(len_a == len_b, "array types of different length cannot be merged");
-            cu::check!(tree_add_merge_deps(a, b, task), "add_merge_deps failed for array element type")?;
+            cu::check!(
+                tree_add_merge_deps(a, b, task),
+                "add_merge_deps failed for array element type"
+            )?;
         }
         (Tree::Ptr(a), Tree::Ptr(b)) => {
-            cu::check!(tree_add_merge_deps(a, b, task), "add_merge_deps failed for pointee type")?;
+            cu::check!(
+                tree_add_merge_deps(a, b, task),
+                "add_merge_deps failed for pointee type"
+            )?;
         }
         (Tree::Sub(args_a), Tree::Sub(args_b)) => {
-            cu::ensure!(args_a.len() == args_b.len(), "subroutine types of different length cannot be merged");
+            cu::ensure!(
+                args_a.len() == args_b.len(),
+                "subroutine types of different length cannot be merged"
+            );
             for (a, b) in std::iter::zip(args_a, args_b) {
-                cu::check!(tree_add_merge_deps(a, b, task), "add_merge_deps failed for subroutine arg or ret type")?;
+                cu::check!(
+                    tree_add_merge_deps(a, b, task),
+                    "add_merge_deps failed for subroutine arg or ret type"
+                )?;
             }
         }
         (Tree::Ptmd(base_a, a), Tree::Ptmd(base_b, b)) => {
             task.add_dep(*base_a, *base_b);
-            cu::check!(tree_add_merge_deps(a, b, task), "add_merge_deps failed for ptmd pointee type")?;
+            cu::check!(
+                tree_add_merge_deps(a, b, task),
+                "add_merge_deps failed for ptmd pointee type"
+            )?;
         }
         (Tree::Ptmf(base_a, a), Tree::Ptmf(base_b, b)) => {
-            cu::ensure!(a.len() == b.len(), "ptmf subroutine types of different length cannot be merged");
+            cu::ensure!(
+                a.len() == b.len(),
+                "ptmf subroutine types of different length cannot be merged"
+            );
             task.add_dep(*base_a, *base_b);
             for (a, b) in std::iter::zip(a, b) {
-                cu::check!(tree_add_merge_deps(a, b, task), "add_merge_deps failed for ptmf subroutine arg or ret type")?;
+                cu::check!(
+                    tree_add_merge_deps(a, b, task),
+                    "add_merge_deps failed for ptmf subroutine arg or ret type"
+                )?;
             }
         }
         _ => {

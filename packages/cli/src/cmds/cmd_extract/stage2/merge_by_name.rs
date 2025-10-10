@@ -13,12 +13,10 @@ pub fn merge_by_name(stage: &mut Stage1) -> cu::Result<()> {
         match t {
             Type1::Prim(prim) => {
                 let e = goff2names.entry(*k).or_default();
-                e.push(
-                    StructuredName::Name(NamespacedTemplatedName::new(
-                        NamespacedName::prim(*prim)
-                    ))
-                );
-            },
+                e.push(StructuredName::Name(NamespacedTemplatedName::new(
+                    NamespacedName::prim(*prim),
+                )));
+            }
             Type1::Enum(name, _, other_names) => {
                 let e = goff2names.entry(*k).or_default();
                 if let Some(name) = name {
@@ -47,10 +45,9 @@ pub fn merge_by_name(stage: &mut Stage1) -> cu::Result<()> {
                     e.push(StructuredName::Name(n.clone()));
                 }
             }
-            Type1::EnumDecl(name, other_names) |
-            Type1::UnionDecl(name, other_names)|
-            Type1::StructDecl(name, other_names) 
-            => {
+            Type1::EnumDecl(name, other_names)
+            | Type1::UnionDecl(name, other_names)
+            | Type1::StructDecl(name, other_names) => {
                 let name = StructuredName::Name(name.clone());
                 let e = goff2names.entry(*k).or_default();
                 e.push(name);
@@ -73,7 +70,10 @@ pub fn merge_by_name(stage: &mut Stage1) -> cu::Result<()> {
             Type1::Struct(_, _, _) | Type1::StructDecl(_, _) => &mut name2goffs_struct,
         };
         let k = *k;
-        let names = cu::check!(permutater.permutated_string_reprs_goff(k), "failed to permutate names for type {k}")?;
+        let names = cu::check!(
+            permutater.permutated_string_reprs_goff(k),
+            "failed to permutate names for type {k}"
+        )?;
         for name in names {
             map.entry(name).or_default().insert(k);
         }
@@ -81,13 +81,14 @@ pub fn merge_by_name(stage: &mut Stage1) -> cu::Result<()> {
 
     let mut merge_tasks = {
         let mut to_merge = vec![];
-        for (merging_name, goffs) in name2goffs_enum.iter()
+        for (merging_name, goffs) in name2goffs_enum
+            .iter()
             .chain(name2goffs_union.iter())
             .chain(name2goffs_struct.iter())
         {
             let v = goffs.iter().copied().collect::<Vec<_>>();
             for (i, k1) in v.iter().copied().enumerate() {
-                for k2 in v.iter().skip(i+1).copied() {
+                for k2 in v.iter().skip(i + 1).copied() {
                     to_merge.push((k1, k2, merging_name));
                 }
             }
@@ -104,7 +105,10 @@ pub fn merge_by_name(stage: &mut Stage1) -> cu::Result<()> {
             if let Err(e) = t1.add_merge_deps(t2, &mut task) {
                 let k1_names = permutater.structured_names(k1);
                 let k2_names = permutater.structured_names(k2);
-                cu::rethrow!(e, "failed to add merge deps for {k1} and {k2}\n- merging_name={merging_name}, k1_names={k1_names:#?}, k2_names={k2_names:#?}");
+                cu::rethrow!(
+                    e,
+                    "failed to add merge deps for {k1} and {k2}\n- merging_name={merging_name}, k1_names={k1_names:#?}, k2_names={k2_names:#?}"
+                );
             }
             merge_tasks.insert(key, task);
         }
@@ -137,7 +141,10 @@ pub fn merge_by_name(stage: &mut Stage1) -> cu::Result<()> {
                     let mut task = MergeTask::new(k1, k2);
                     let t1 = stage.types.get(&k1).unwrap();
                     let t2 = stage.types.get(&k2).unwrap();
-                    cu::check!(t1.add_merge_deps(t2, &mut task), "failed to add merge deps (from orphan deps) for {k1} and {k2}")?;
+                    cu::check!(
+                        t1.add_merge_deps(t2, &mut task),
+                        "failed to add merge deps (from orphan deps) for {k1} and {k2}"
+                    )?;
                     merge_tasks.insert((k1, k2).into(), task);
                     changed = true;
                     continue;
@@ -256,12 +263,14 @@ pub fn merge_by_name(stage: &mut Stage1) -> cu::Result<()> {
         cu::bail!("not all merges were completed! remaining: {merge_tasks:#?}");
     }
 
-    let deduped = deduper::dedupe_with_merger(std::mem::take(&mut stage.types), 
-        buckets, &mut stage.symbols, None, |data, buckets| {
-        data.map_goff(|k| Ok(buckets.primary_fallback(k)))
-    }, |t1, t2| {
-            t1.get_merged(t2)
-        });
+    let deduped = deduper::dedupe_with_merger(
+        std::mem::take(&mut stage.types),
+        buckets,
+        &mut stage.symbols,
+        None,
+        |data, buckets| data.map_goff(|k| Ok(buckets.primary_fallback(k))),
+        |t1, t2| t1.get_merged(t2),
+    );
     let deduped = cu::check!(deduped, "merge_by_name: dedupe failed")?;
     stage.types = deduped;
 

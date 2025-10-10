@@ -121,9 +121,13 @@ pub async fn run_stage1(mut stage: Stage0, command: &CompileCommand) -> cu::Resu
     for (k, g) in dupes {
         types.insert(k, types.get(&g).unwrap().clone());
     }
-    let deduped = super::super::deduper::dedupe(types, GoffBuckets::default(), &mut stage.symbols, None, |data, buckets| {
-        data.map_goff(|k| Ok(buckets.primary_fallback(k)))
-    });
+    let deduped = super::super::deduper::dedupe(
+        types,
+        GoffBuckets::default(),
+        &mut stage.symbols,
+        None,
+        |data, buckets| data.map_goff(|k| Ok(buckets.primary_fallback(k))),
+    );
     let deduped = cu::check!(deduped, "stage1: final deduped failed")?;
 
     Ok(Stage1 {

@@ -38,11 +38,13 @@ pub fn clean_typedefs(stage: &mut Stage0) -> cu::Result<()> {
         }
     }
 
-    let deduped = deduper::dedupe(new_map, buckets, &mut stage.symbols, 
+    let deduped = deduper::dedupe(
+        new_map,
+        buckets,
+        &mut stage.symbols,
         Some(&mut stage.ns),
-        |data, buckets| {
-        data.map_goff(|k| Ok(buckets.primary_fallback(k)))
-    });
+        |data, buckets| data.map_goff(|k| Ok(buckets.primary_fallback(k))),
+    );
     let deduped = cu::check!(deduped, "clean_typedefs: dedupe failed")?;
 
     stage.types = deduped;

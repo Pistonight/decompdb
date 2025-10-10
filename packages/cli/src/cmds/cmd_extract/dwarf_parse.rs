@@ -686,12 +686,8 @@ impl GoffPair {
 }
 impl From<(Goff, Goff)> for GoffPair {
     fn from(value: (Goff, Goff)) -> Self {
-        let (a,b) = value;
-        if a < b {
-            Self(a, b)
-        } else {
-            Self(b, a)
-        }
+        let (a, b) = value;
+        if a < b { Self(a, b) } else { Self(b, a) }
     }
 }
 impl From<GoffPair> for (Goff, Goff) {

@@ -96,14 +96,17 @@ fn load_namespace_recur(node: DieNode<'_, '_>, ctx: &mut LoadNamespaceCtx) -> cu
                 ctx.register_current_at_offset(offset);
                 let linkage_name = super::stage0_loader::load_func_linkage_name(&entry)?;
                 match linkage_name {
-                    Some(n) => ctx.current_qualifier.push(NameSeg::Subprogram(offset, n.as_str().into(), true)),
+                    Some(n) => ctx
+                        .current_qualifier
+                        .push(NameSeg::Subprogram(offset, n.as_str().into(), true)),
                     None => {
                         let name = super::stage0_loader::load_func_name(&entry)?;
                         let name = match name {
                             Some(name) => name,
-                            None => "anonymous".to_string()
+                            None => "anonymous".to_string(),
                         };
-                        ctx.current_qualifier.push(NameSeg::Subprogram(offset, name.as_str().into(), false));
+                        ctx.current_qualifier
+                            .push(NameSeg::Subprogram(offset, name.as_str().into(), false));
                     }
                 }
                 node.for_each_child(|child| load_namespace_recur(child, ctx))?;

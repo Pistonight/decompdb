@@ -8,35 +8,34 @@ use super::bucket::GoffBuckets;
 use super::pre::*;
 use super::type_structure::*;
 
-pub fn dedupe<
-T: Eq + Hash + std::fmt::Debug, 
-FMap: Fn(&mut T, &GoffBuckets) -> cu::Result<()>,
->(
+pub fn dedupe<T: Eq + Hash + std::fmt::Debug, FMap: Fn(&mut T, &GoffBuckets) -> cu::Result<()>>(
     map: GoffMap<T>,
     buckets: GoffBuckets,
     symbols: &mut BTreeMap<String, SymbolInfo>,
     namespace: Option<&mut NamespaceMaps>,
     mapper: FMap,
 ) -> cu::Result<GoffMap<T>> {
-    dedupe_with_merger(
-        map, buckets, symbols,namespace,mapper,|a, b| {
-            cu::bail!("the data are not equal after mapping, please check the mapper implementation.\na={:#?}, b={:#?}. If this is expected, a merger must be provided to do dedupe-time-merging.", a, b);
-        }
-    )
+    dedupe_with_merger(map, buckets, symbols, namespace, mapper, |a, b| {
+        cu::bail!(
+            "the data are not equal after mapping, please check the mapper implementation.\na={:#?}, b={:#?}. If this is expected, a merger must be provided to do dedupe-time-merging.",
+            a,
+            b
+        );
+    })
 }
 
 /// Dedupe goffs that map to the same type data
 pub fn dedupe_with_merger<
-T: Eq + Hash + std::fmt::Debug, 
-FMap: Fn(&mut T, &GoffBuckets) -> cu::Result<()>,
-FMerge: Fn(&T, &T) -> cu::Result<T>,
+    T: Eq + Hash + std::fmt::Debug,
+    FMap: Fn(&mut T, &GoffBuckets) -> cu::Result<()>,
+    FMerge: Fn(&T, &T) -> cu::Result<T>,
 >(
     mut map: GoffMap<T>,
     mut buckets: GoffBuckets,
     symbols: &mut BTreeMap<String, SymbolInfo>,
     namespace: Option<&mut NamespaceMaps>,
     mapper: FMap,
-    merger: FMerge
+    merger: FMerge,
 ) -> cu::Result<GoffMap<T>> {
     loop {
         // must run mapper first to make sure collision and merge check
@@ -55,7 +54,10 @@ FMerge: Fn(&T, &T) -> cu::Result<T>,
                     if e.get() == &t {
                         continue;
                     }
-                    let merged = cu::check!(merger(e.get(), &t), "failed to merge {goff} into {k}, dedupe-time merging failed")?;
+                    let merged = cu::check!(
+                        merger(e.get(), &t),
+                        "failed to merge {goff} into {k}, dedupe-time merging failed"
+                    )?;
                     e.insert(merged);
                 }
                 Entry::Vacant(e) => {

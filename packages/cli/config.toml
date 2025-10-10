@@ -39,11 +39,10 @@ abandon-typedefs = [
     "^std::__1::__optional_sfinae_assign_base_t",
     "^std::__1::__optional_sfinae_ctor_base_t",
 
-    # DWARF contains wrong namespace for nn::gfx::InfoType typedefs
-    # and causes conflicts
+    # nn::gfx::InfoType typedefs
     "^InfoType$",
 
-    # uking::Factory in multiple TUs
+    # uking::Factory for both Ai factory and Action factory
     "^uking::Factory$",
 ]
 
