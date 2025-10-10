@@ -1,19 +1,6 @@
 use cu::pre::*;
 
-use super::super::bucket::GoffBuckets;
 use super::pre::*;
-
-pub fn run_stage2_parallel(mut stage: Stage1) -> cu::Result<Stage1> {
-    cu::check!(
-        super::merge_by_name(&mut stage),
-        "merge_by_name failed for {}",
-        stage.name
-    )?;
-    if stage.name.contains("PauseMenuDataMgr") {
-        cu::print!("{:#?}", stage.types);
-    }
-    Ok(stage)
-}
 
 pub async fn run_stage2_serial(mut stages: Vec<Stage1>) -> cu::Result<Stage1> {
     cu::ensure!(!stages.is_empty(), "no CUs to merge");
@@ -62,7 +49,7 @@ pub async fn run_stage2_serial(mut stages: Vec<Stage1>) -> cu::Result<Stage1> {
             Type1::Prim(_) => {}
             Type1::Enum(_, _, _) => {
                 enum_count += 1;
-                cu::print!("{t:#?}");
+                // cu::print!("{t:#?}");
             }
             Type1::Union(_, _, _) => union_count += 1,
             Type1::UnionDecl(_, _) => union_decl_count += 1,

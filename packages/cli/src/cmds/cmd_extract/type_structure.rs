@@ -330,6 +330,40 @@ impl Type1 {
             }
         }
     }
+
+    /// A struct or union is directly recursive if the type tree of any member
+    /// references itself
+    pub fn is_layout_directly_recursive(&self, self_goff: Goff) -> bool {
+        match self {
+            Type1::Prim(_) => false,
+            Type1::Enum(_, _, _) => false,
+            // declarations can't be recursive as they don't specify members
+            Type1::EnumDecl(_, _) => false,
+            Type1::UnionDecl(_, _) => false,
+            Type1::StructDecl(_, _) => false,
+            Type1::Union(_, data, _) => {
+                for m in &data.members {
+                    if m.type_contains(self_goff) {
+                        return true
+                    }
+                }
+                false
+            }
+            Type1::Struct(_, data, _) => {
+                for m in &data.members {
+                    if m.type_contains(self_goff) {
+                        return true
+                    }
+                }
+                false
+            }
+        }
+    }
+
+    /// Replace occurrences of a goff anywhere referrenced in this type
+    /// with another type tree
+    pub fn replace(&mut self, goff: Goff, replacement: &Tree<Goff>) {
+    }
 }
 
 pub struct Stage0 {
@@ -768,32 +802,19 @@ impl Member {
             "add_merge_deps failed for member"
         )
     }
-}
 
-// impl Member {
-//     pub fn merge_checked(&self, other: &Self, merges: &mut MergeQueue) -> cu::Result<()> {
-//         cu::ensure!(
-//             self.offset == other.offset,
-//             "member offsets are not equal: {} != {}",
-//             self.offset,
-//             other.offset
-//         );
-//         cu::ensure!(
-//             self.name == other.name,
-//             "member names are not equal: {:?} != {:?}",
-//             self.name,
-//             other.name
-//         );
-//         cu::ensure!(
-//             self.special == other.special,
-//             "member special types are not equal: {:?} != {:?}",
-//             self.special,
-//             other.special
-//         );
-//         merges.push(self.ty, other.ty)?;
-//         Ok(())
-//     }
-// }
+    /// If the type of this member contains a goff (directly, not as nested members)
+    pub fn type_contains(&self, goff: Goff) -> bool {
+        let mut out = false;
+        let _ = self.ty.for_each(|r| {
+            if *r == goff {
+                out = true;
+            }
+            cu::Ok(())
+        });
+        out
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VtableEntry {
@@ -1458,6 +1479,11 @@ impl SymbolInfo {
             "cannot merge symbol info with different param_names"
         );
         Ok(())
+    }
+
+    /// Replace occurrences of a goff anywhere referrenced in this type
+    /// with another type tree
+    pub fn replace(&mut self, goff: Goff, replacement: &Tree<Goff>) {
     }
 }
 

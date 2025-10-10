@@ -15,7 +15,6 @@ mod namespace;
 mod stage0_loader;
 // mod type0_compiler;
 // mod type_compiler;
-// mod type_optimizer;
 // mod type_linker;
 mod type_structure;
 
