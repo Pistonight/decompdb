@@ -47,21 +47,12 @@ pub async fn run_stage2_serial(mut stages: Vec<Stage1>) -> cu::Result<Stage1> {
     for t in stage.types.values() {
         match t {
             Type1::Prim(_) => {}
-            Type1::Enum(_, _, _) => {
-                enum_count += 1;
-                // cu::print!("{t:#?}");
-            }
+            Type1::Enum(_, _, _) => enum_count += 1,
             Type1::Union(_, _, _) => union_count += 1,
             Type1::UnionDecl(_, _) => union_decl_count += 1,
             Type1::Struct(_, _, _) => struct_count += 1,
-            Type1::EnumDecl(_, _) => {
-                enum_decl_count += 1;
-                // cu::print!("{t:#?}");
-            }
-            Type1::StructDecl(_, _) => {
-                struct_decl_count += 1;
-                // cu::print!("{t:#?}");
-            }
+            Type1::EnumDecl(_, _) => enum_decl_count += 1,
+            Type1::StructDecl(_, _) => struct_decl_count += 1,
         }
     }
     cu::print!("enum_count: {enum_count}");

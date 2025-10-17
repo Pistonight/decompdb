@@ -57,8 +57,6 @@ fn optimize_little_member_union(stage: &Stage1) -> cu::Result<OptimizeOutput> {
                     continue;
                 }
                 
-
-
             }
         }
     }

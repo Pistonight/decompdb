@@ -72,89 +72,215 @@ impl<Repr> Tree<Repr> {
         }
     }
 
-    pub fn map<T, F: FnMut(Repr) -> T>(self, mut f: F) -> Tree<T> {
+    /// Replace the base representation of the tree using a mapping function
+    #[inline(always)]
+    pub fn map<T, F: FnMut(Repr) -> T>(self, f: F) -> Tree<T> {
+        let mut f: Box<dyn FnMut(Repr) -> T> = Box::new(f);
+        self.map_impl(&mut f)
+    }
+    fn map_impl<'a, T>(self, f: &mut Box<dyn FnMut(Repr) -> T + 'a>) -> Tree<T> {
         match self {
             Tree::Base(x) => Tree::Base(f(x)),
-            Tree::Array(x, len) => Tree::Array(Box::new(x.map(f)), len),
-            Tree::Ptr(x) => Tree::Ptr(Box::new(x.map(f))),
+            Tree::Array(x, len) => Tree::Array(Box::new(x.map_impl(f)), len),
+            Tree::Ptr(x) => Tree::Ptr(Box::new(x.map_impl(f))),
             Tree::Sub(x) => {
                 let mut x2 = Vec::with_capacity(x.len());
                 let mut f_erased: Box<dyn FnMut(Repr) -> T> = Box::new(f);
                 for t in x {
-                    x2.push(t.map(&mut f_erased));
+                    x2.push(t.map_impl(&mut f_erased));
                 }
                 Tree::Sub(x2)
             }
             Tree::Ptmd(x, y) => {
                 let x = f(x);
-                let y = y.map(f);
+                let y = y.map_impl(f);
                 Tree::Ptmd(x, Box::new(y))
             }
             Tree::Ptmf(x, y) => {
                 let x = f(x);
                 let mut y2 = Vec::with_capacity(y.len());
-                let mut f_erased: Box<dyn FnMut(Repr) -> T> = Box::new(f);
                 for t in y {
-                    y2.push(t.map(&mut f_erased));
+                    y2.push(t.map_impl(f));
                 }
                 Tree::Ptmf(x, y2)
             }
         }
     }
-    pub fn for_each<F: FnMut(&Repr) -> cu::Result<()>>(&self, mut f: F) -> cu::Result<()> {
+
+    /// Execute a function on each node of the type tree
+    #[inline(always)]
+    pub fn for_each<F: FnMut(&Repr) -> cu::Result<()>>(&self, f: F) -> cu::Result<()> {
+        let mut f: Box<dyn FnMut(&Repr) -> cu::Result<()>> = Box::new(f);
+        self.for_each_impl(&mut f)
+    }
+    fn for_each_impl<'a>(&self, f: 
+        &mut Box<dyn FnMut(&Repr) -> cu::Result<()> + 'a>
+    ) -> cu::Result<()> {
         match self {
             Tree::Base(x) => f(x),
-            Tree::Array(x, _) => x.for_each(f),
-            Tree::Ptr(x) => x.for_each(f),
+            Tree::Array(x, _) => x.for_each_impl(f),
+            Tree::Ptr(x) => x.for_each_impl(f),
             Tree::Sub(x) => {
-                let mut f_erased: Box<dyn FnMut(&Repr) -> cu::Result<()>> = Box::new(f);
                 for t in x {
-                    t.for_each(&mut f_erased)?;
+                    t.for_each_impl(f)?;
                 }
                 Ok(())
             }
             Tree::Ptmd(x, y) => {
                 f(x)?;
-                y.for_each(f)
+                y.for_each_impl(f)
             }
             Tree::Ptmf(x, y) => {
                 f(x)?;
-                let mut f_erased: Box<dyn FnMut(&Repr) -> cu::Result<()>> = Box::new(f);
                 for t in y {
-                    t.for_each(&mut f_erased)?;
+                    t.for_each_impl(f)?;
                 }
                 Ok(())
             }
         }
     }
+
+    /// Execute a function on every base representation that is a base type of a PTMD or PTMF.
+    /// The function might be called multiple times on the same base repr
+    #[inline(always)]
+    pub fn for_each_ptm_base<F: FnMut(&Repr)>(&self, f: F) {
+        let mut f: Box<dyn FnMut(&Repr)> = Box::new(f);
+        self.for_each_ptm_base_impl(&mut f)
+    }
+    fn for_each_ptm_base_impl<'a>(&self, f: 
+        &mut Box<dyn FnMut(&Repr)+'a>
+    ) {
+        match self {
+            Tree::Base(_) => {}
+            Tree::Array(x, _) => x.for_each_ptm_base_impl(f),
+            Tree::Ptr(x) => x.for_each_ptm_base_impl(f),
+            Tree::Sub(x) => {
+                for t in x {
+                    t.for_each_ptm_base_impl(f);
+                }
+            }
+            Tree::Ptmd(x, y) => {
+                f(x);
+                y.for_each_ptm_base_impl(f)
+            }
+            Tree::Ptmf(x, y) => {
+                f(x);
+                for t in y {
+                    t.for_each_ptm_base_impl(f);
+                }
+            }
+        }
+    }
+
+    /// Execute a function on each mutable node of the type tree
+    #[inline(always)]
     pub fn for_each_mut<F: FnMut(&mut Repr) -> cu::Result<()>>(
         &mut self,
-        mut f: F,
+        f: F,
+    ) -> cu::Result<()> {
+        let mut f: Box<dyn FnMut(&mut Repr) -> cu::Result<()>> = Box::new(f);
+        self.for_each_mut_impl(&mut f)
+    }
+    fn for_each_mut_impl<'a>(
+        &mut self,
+        f: &mut Box<dyn FnMut(&mut Repr) -> cu::Result<()> + 'a>,
     ) -> cu::Result<()> {
         match self {
             Tree::Base(x) => f(x),
-            Tree::Array(x, _) => x.for_each_mut(f),
-            Tree::Ptr(x) => x.for_each_mut(f),
+            Tree::Array(x, _) => x.for_each_mut_impl(f),
+            Tree::Ptr(x) => x.for_each_mut_impl(f),
             Tree::Sub(x) => {
-                let mut f_erased: Box<dyn FnMut(&mut Repr) -> cu::Result<()>> = Box::new(f);
                 for t in x {
-                    t.for_each_mut(&mut f_erased)?;
+                    t.for_each_mut_impl(f)?;
                 }
                 Ok(())
             }
             Tree::Ptmd(x, y) => {
                 f(x)?;
-                y.for_each_mut(f)
+                y.for_each_mut_impl(f)
             }
             Tree::Ptmf(x, y) => {
                 f(x)?;
-                let mut f_erased: Box<dyn FnMut(&mut Repr) -> cu::Result<()>> = Box::new(f);
                 for t in y {
-                    t.for_each_mut(&mut f_erased)?;
+                    t.for_each_mut_impl(f)?;
                 }
                 Ok(())
             }
         }
+    }
+    
+    /// Replace nodes with subtree using a replacer function. Returns None if no replacement
+    /// are made.
+    ///
+    /// The replacer function must return None or Some(Tree::Base) for nodes that appear as base type for PTMD or PTMF.
+    /// Otherwise, an error will be returned.
+    #[inline(always)]
+    pub fn to_replaced<F: FnMut(&Repr) -> Option<Self>>(
+        &mut self,
+        f: F,
+    ) -> cu::Result<Option<Self>> 
+    where Repr: Clone
+    {
+        let mut f: Box<dyn FnMut(&Repr) -> Option<Self>> = Box::new(f);
+        self.to_replaced_impl(&mut f)
+    }
+    fn to_replaced_impl<'a>(&self, f: &mut Box<dyn FnMut(&Repr) -> Option<Self> + 'a>)
+        -> cu::Result<Option<Self>>
+    where Repr: Clone
+    {
+        match self {
+            Tree::Base(x) => Ok(f(x)),
+            Tree::Array(x, len) => {
+                Ok(x.to_replaced_impl(f)?.map(|elem| Self::array(elem, *len)))
+            }
+            Tree::Ptr(x) => {
+                Ok(x.to_replaced_impl(f)?.map(Self::ptr))
+            }
+            Tree::Sub(x) => {
+                Ok(Self::to_replaced_impl_vec(x, f)?.map(Tree::Sub))
+            }
+            Tree::Ptmd(base, x) => {
+                todo!() // Tree::Base case
+                if f(base).is_some() {
+                    cu::bail!("ptmd base type cannot be replaced with tree! check if the type is replacable before calling to_replaced");
+                }
+                Ok(x.to_replaced_impl(f)?.map(|new_x| Self::ptmd(base.clone(), new_x)))
+            }
+            Tree::Ptmf(base, x) => {
+                if f(base).is_some() {
+                    cu::bail!("ptmf base type cannot be replaced with tree! check if the type is replacable before calling to_replaced");
+                }
+                Ok(Self::to_replaced_impl_vec(x, f)?.map(|new_x| Self::ptmf(base.clone(), new_x)))
+            }
+        }
+    }
+    fn to_replaced_impl_vec<'a>(v: &[Self], f: &mut Box<dyn FnMut(&Repr) -> Option<Self> + 'a>)
+        -> cu::Result<Option<Vec<Self>>>
+    where Repr: Clone
+    {
+        let mut out: Vec<Self> = vec![];
+        for (i, t) in v.iter().enumerate() {
+            match t.to_replaced_impl(f)? {
+                None => {
+                    if !out.is_empty() {
+                        out.push(t.clone())
+                    }
+                }
+                Some(new_t) => {
+                    if out.is_empty() {
+                        out.reserve_exact(v.len());
+                        for t in v.iter().take(i) {
+                            out.push(t.clone());
+                        }
+                    }
+                    out.push(new_t)
+                }
+            }
+        }
+        if out.is_empty() {
+            return Ok(None)
+        }
+        Ok(Some(out))
     }
 }
 
